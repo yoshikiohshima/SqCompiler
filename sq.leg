@@ -1,6 +1,7 @@
 %{
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 
 FILE *myfile = NULL;
 
@@ -11,20 +12,15 @@ FILE *myfile = NULL;
                   }
 */
 
-#define YY_DEBUG
+//#define YY_DEBUG
 
 typedef struct _value {
   int type;
   int size;
   union {
-    struct _cons {
-      struct _value *car;
-      struct _value *cdr;
-    } cons;
-    union {
-      char *string;
-      int integer;
-    } atom;
+    char *string;
+    int integer;
+    struct _value **expression;
   } body;
 } *value;
 
@@ -34,67 +30,72 @@ typedef struct _value {
 #define SINTEGER 1
 #define SSTRING 2
 #define SSYMBOL 3
-#define SCONS 4
+#define SEXPRESSION 4
 
-void PrintList(value a);
+void print_value(value a);
 
 value
-Value(int type, char *string, int integer)
+mk_value(int type, char *string, int integer)
 {
   value v = malloc(sizeof(struct _value));
   v->type = type;
   if (type == SINTEGER) {
     v->size = 0;
-    v->body.atom.integer = integer;
+    v->body.integer = integer;
   } else if (type == SSTRING || type == SSYMBOL) {
-    v->body.atom.string = strdup(string);
+    v->body.string = strdup(string);
     v->size = strlen(string);
   }
   return v;
 }
 
 value
-Cons(value a, value d)
+mk_expression(value e, ...)
 {
+  static value value_buffer[100];
+  va_list ap;
+  int i = 0;
   value v = malloc(sizeof(struct _value));
-  v->type = SCONS;
-  v->body.cons.car = a;
-  v->body.cons.cdr = d;
+  v->type = SEXPRESSION;
+  value ee;
+
+  va_start(ap, e);
+  for (ee = e; ee != NULL; ee = va_arg(ap, value)) {
+    value_buffer[i++] = ee;
+  }
+  va_end(ap);
+  v->size = i;
+  v->body.expression = malloc(i*sizeof(value));
+  memcpy(v->body.expression, value_buffer, i*sizeof(value));
+  return v;
+}
+  
+value
+mk_string(char *string)
+{
+  return mk_value(SSTRING, string, 0);
+}
+
+value
+mk_symbol(char *string)
+{
+  return mk_value(SSYMBOL, string, 0);
+}
+
+value
+mk_empty_symbol()
+{
+  char *m = malloc(1000);
+  value v = mk_symbol("");
+  memset(m, 0, 1000);
+  v->body.string= m;
   return v;
 }
 
 value
-Copy(value a)
+mk_integer(int v)
 {
-
-  value result;
-  if (a->type != SCONS) {
-    return a;
-  }
-
-  result = malloc(sizeof(struct _value));
-  result->type = SCONS;
-  result->body.cons.car = Copy(a->body.cons.car);
-  result->body.cons.cdr = Copy(a->body.cons.cdr);
-  return result;
-}
-
-value
-String(char *string)
-{
-  return Value(SSTRING, string, 0);
-}
-
-value
-Symbol(char *string)
-{
-  return Value(SSYMBOL, string, 0);
-}
-
-value
-Integer(int v)
-{
-  return Value(SINTEGER, NULL, v);
+  return mk_value(SINTEGER, NULL, v);
 }
 
 int
@@ -112,137 +113,116 @@ digitValue(char v)
 }
 
 value
-Null()
+mk_null()
 {
-  return Value(SNULL, NULL, 0);
+  return mk_value(SNULL, NULL, 0);
 }
 
 value
-Append(value a, value d)
+expression_append(value a, value b)
 {
-  value current;
-  value tail;
-
-  if (a->type == SNULL) {
-    a->type = SCONS;
-    a->body.cons.car = d->body.cons.car;
-    a->body.cons.cdr = d->body.cons.cdr;
-    return a;
-  }
-
-  current = a;
-  tail = a->body.cons.cdr;
-
-  while (tail->type != SNULL) {
-    current = tail;
-    tail = tail->body.cons.cdr;
-  }
-  current->body.cons.cdr = d;
+  value *exp = malloc(sizeof(value*) * (a->size + b->size));
+  memcpy(exp, a->body.expression, sizeof(value*) * a->size);
+  memcpy(exp+a->size, b->body.expression, sizeof(value*) * b->size);
+  a->size += b->size;
   return a;
 }
 
 void
-Print(value a)
+print_value(value a)
 {
-  if (a->type == SCONS) {
+  if (a->type == SEXPRESSION) {
+    int i;
     printf("(");
-    Print(a->body.cons.car);
-    printf(" ");
-    PrintList(a->body.cons.cdr);
+    for (i = 0; i < a->size; i++) {
+      print_value(a->body.expression[i]);
+      if (i < a->size - 1) printf(" ");
+    }
     printf(")");
   }
   else if (a->type == SINTEGER) {
-    printf("%d", a->body.atom.integer);
+    printf("%d", a->body.integer);
   } else if (a->type == SSTRING) {
-    printf("\"%s\"", a->body.atom.string);
+    printf("\'%s\'", a->body.string);
   } else if (a->type == SSYMBOL) {
-    printf("#%s", a->body.atom.string);
-  }
-}
-
-void
-PrintList(value a)
-{
-  if (a->type == SCONS) {
-    Print(a->body.cons.car);
-    if (a->body.cons.cdr->type != SNULL) {
-      printf(" ");
-      PrintList(a->body.cons.cdr);
-    }
-  }
-  else if (a->type == SINTEGER) {
-    printf(". %d", a->body.atom.integer);
-  } else if (a->type == SSTRING) {
-    printf(". \"%s\"", a->body.atom.string);
-  } else if (a->type == SSYMBOL) {
-    printf(". #%s", a->body.atom.string);
+    printf("#%s", a->body.string);
   }
 }
 
 %}
 
-Start = - s:Expression							     { Print(s); }
+start = - s:expression						     { print_value(s); printf("\n");}
 
-Variable = i:Identifier 						     { $$ = Cons(Symbol("variable"), Cons(i, Null()));}
+expression = v:variable assign u:expression			     { $$ = mk_expression(mk_symbol("assign"), v, u, NULL);}
+	   | message-send
+	   | primary
 
-Expression = Integer
+variable = i:identifier 					     { $$ = mk_expression(mk_symbol("variable"), i, NULL);}
 
-#v:Variable Assign u:Variable				     { $$ = Cons (Symbol("assign"), Cons(v, Cons(u, Null()))); }
-	   
+pseudo-variable = <('self' | 'super')> - 			     { $$ = mk_string(yytext);}
 
-NewList = {$$ = Value(SNULL, NULL, 0);}
-
-LBrace = '{' -
-RBrace = '}' -
-
-LAngle = '<' -
-RAngle = '>' -
-
-LParen = '(' -
-RParen = ')' -
-
-LBrack = '[' -
-RBrack = ']' -
-
-Bar    = '|' -
-Hat    = '^' -
-
-Assign  = ('_' | ':=') -
-
-IdentifierCharacter = [a-zA-Z]
-IdentifierRest = [a-zA-Z0-9]
-IdentifierName = <IdentifierCharacter IdentifierRest*>			     {$$ = String(yytext);}
-
-Identifier = i:IdentifierName -						     {$$ = i;}
-
-Comment = '\"' <(!'\"' .)*> '\"'						     {$$ = String(yytext);}
-
--     = ([ \t\n\r] | Comment)*
-
-Integer = s:NewInteger b:NewInteger ret:NewInteger
-          ('-' {s->body.atom.integer = -1;} | {s->body.atom.integer = 1;})
-          (<([0-9][0-9] | [0-9])> 'r' {b->body.atom.integer = atoi(yytext);} | - {b->body.atom.integer = 10;})
-          {ret->body.atom.integer = 0}
+integer = s:new-integer b:new-integer ret:new-integer
+          ('-' {s->body.integer = -1;} | {s->body.integer = 1;})
+          (<([0-9][0-9] | [0-9])> 'r' {b->body.integer = atoi(yytext);} | - {b->body.integer = 10;})
+          {ret->body.integer = 0}
 	  (<[0-9A-Z]>
-             {ret->body.atom.integer = ret->body.atom.integer * b->body.atom.integer + digitValue(yytext[0]);})+ - 
-	  {$$ = Integer(ret->body.atom.integer * s->body.atom.integer);}
-NewInteger = {$$ = Integer(0);}
+             {ret->body.integer = ret->body.integer * b->body.integer + digitValue(yytext[0]);})+ - 
+	  {$$ = mk_integer(ret->body.integer * s->body.integer);}
+new-integer = {$$ = mk_integer(0);}
 
-SingleString = "\'" <(!"\'" .)*> "\'"						{$$ = String(yytext);}
+single-string = "\'" <(!"\'" .)*> "\'"						{$$ = mk_string(yytext);}
 
-Selector = KeywordSelector | UnarySelector | BinarySelector
+selector = keyword-selector | unary-selector | binary-selector
 
-UnarySelector = name:IdentifierName !':' - 					{$$ = Symbol(name->body.atom.string);}
-BinarySelector = <BinaryCharacter*>	 					{$$ = Symbol(yytext);}
-KeywordSelector = ret:NewEmptySymbol (k:KeywordName {strcat(ret->body.atom.string, k->body.atom.string);})+ {ret->size = strlen(ret->body.atom.string); $$ = ret;}
-BinaryCharacter = [-+/\\*~<>=@%|&?,`]
-NewEmptySymbol = {{char *m = malloc(1000); value v = Symbol(""); memset(m, 0, 1000); v->body.atom.string= m; $$ = v;}}
+unary-selector = name:identifier-name !':' - 					{$$ = mk_symbol(name->body.string);}
+binary-selector = <binary-character*>	 					{$$ = mk_symbol(yytext);}
+keyword-selector = ret:new-empty-symbol (k:keyword-name {strcat(ret->body.string, k->body.string);})+ {ret->size = strlen(ret->body.string); $$ = ret;}
+binary-character = [-+/\\*~<>=@%|&?,`]
+new-empty-symbol = {$$ = mk_empty_symbol();}
+new-empty-expression = {$$ = mk_expression(NULL);}
 
-KeywordName = <(IdentifierName ':')>	   	     		 	      {$$ = String(yytext);}
+keyword      = k:keyword-name -						      {$$ = k;}
+keyword-name = <(identifier-name ':')>	   	     		 	      {$$ = mk_string(yytext);}
 
-MessageSend = KeywordSend | BinarySend | UnarySend
+message-send = keyword-send | binary-send | unary-send
+keyword-send = r:binary-argument args:new-empty-expression name:new-empty-symbol
+	       (s:keyword a:binary-argument {expression_append(name, s); expression_append(args, a); })+
+               {$$ = expression_append(mk_expression(mk_symbol("send"), name, r, NULL), args); }
+binary-send = r:unary-argument (s:binary-selector a:unary-argument {r = mk_expression(mk_symbol("send"), s, r, a, NULL);})+ {$$ = r;}
+binary-argument = binary-send | unary-argument
+unary-argument = unary-send | primary
+unary-send    = r:primary (s:unary-selector {r = mk_expression(mk_symbol("send"), s, r, NULL);})+ {$$ = r;}
 
-BinarySend = r:UnaryArgument
+primary = variable | pseudo-variable | literal | (lparen e:expression rparen {$$ = e})
+
+literal = single-string | integer
+
+lbrace = '{' -
+rbrace = '}' -
+
+langle = '<' -
+rangle = '>' -
+
+lparen = '(' -
+rparen = ')' -
+
+lbrack = '[' -
+rbrack = ']' -
+
+bar    = '|' -
+hat    = '^' -
+
+assign  = ('_' | ':=') -
+
+identifier-character = [a-zA-Z]
+identifier-rest = [a-zA-Z0-9]
+identifier-name = <identifier-character identifier-rest*>			     {$$ = mk_string(yytext);}
+
+identifier = i:identifier-name -						     {$$ = i;}
+
+comment = '\"' <(!'\"' .)*> '\"'						     {$$ = mk_string(yytext);}
+
+-     = ([ \t\n\r] | comment)*
 
 %%
 
