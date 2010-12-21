@@ -8,7 +8,7 @@ TEE = cat >
 all : $(EXAMPLES)
 
 sq : .FORCE
-	../leg -o sq.leg.c sq.leg
+	../leg -v -o sq.leg.c sq.leg
 	$(CC) $(CFLAGS) -o $@ sq.leg.c 
 	./$@
 

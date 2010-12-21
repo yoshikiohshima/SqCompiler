@@ -1,6 +1,122 @@
 !MCompiler methodsFor: 'public access' stamp: 'yo 12/15/2010 23:46'!
 evaluate: textOrStream in: aContext to: receiver
 
-	class _ 1 ifTrue: [receiver]
+	| method selector class methodPair v |
+	class _ (aContext == nil ifTrue: [receiver] ifFalse: [aContext receiver]) class.
+	methodPair  := self compileNoPattern: textOrStream in: class context: aContext for: receiver.
+	method _ methodPair first.
+	selector _ aContext isNil
+		ifTrue: [#DoIt]
+		ifFalse: [#DoItIn:].
+	class addSelector: selector withMethod: method.
+	v := aContext isNil
+		ifTrue: [receiver DoIt]
+		ifFalse: [receiver DoItIn: aContext].
+	class removeSelector: selector.
+	^ v.
 ! !
+
+!MCompiler methodsFor: 'private' stamp: 'yo 11/10/2010 20:27'!
+parser
+
+	^ parser ifNil: [parser := Parser new].
+! !
+
+!MCompiler methodsFor: 'private' stamp: 'yo 11/10/2010 21:02'!
+parser: anObject
+
+	parser := anObject.
+! !
+
+!MCompiler methodsFor: 'private' stamp: 'yo 11/10/2010 21:13'!
+translate: aStream in: class context: context noPattern: noPattern for: instance
+	^ self parser
+			parse: aStream
+			class: class
+			noPattern: noPattern
+			context: context for: instance.
+! !
+
+
+!MCompiler class methodsFor: 'as yet unclassified' stamp: 'yo 11/11/2010 00:56'!
+new
+
+	^ super new parser: Parser new.
+! !
+
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  '!
+assignmentCheck: encoder at: location
+	"For messageNodes masquerading as variables for the debugger.
+	For now we let this through - ie we allow stores ev
+	into args.  Should check against numArgs, though."
+	^ -1! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  '!
+canBeSpecialArgument
+	"Can I be an argument of (e.g.) ifTrue:?"
+
+	^false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  '!
+canCascade
+
+	^false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  '!
+isArg
+
+	^false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  '!
+isComplex
+	"Used for pretty printing to determine whether to start a new line"
+
+	^false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  '!
+isConstantNumber  "Overridden in LiteralNode"
+	^false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  ls 1/29/2004 21:11'!
+isJust: node
+	^false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  di 4/5/2000 11:14'!
+isLiteral
+
+	^ false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  '!
+isMessage: selSymbol receiver: rcvrPred arguments: argsPred
+	"See comment in MessageNode."
+
+	^false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  '!
+isReturningIf
+
+	^false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  '!
+isReturnSelf
+
+	^false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  tk 8/2/1999 18:39'!
+isSelfPseudoVariable	
+	"Overridden in VariableNode."
+	^false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  '!
+isSpecialConstant
+	^ false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  di 10/12/1999 15:28'!
+isTemp
+	^ false! !
+
+!MParseNode methodsFor: 'testing' stamp: 'yo 11/9/2010 19:22  <  '!
+isUndefTemp
+	^ false! !
 
