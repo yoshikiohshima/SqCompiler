@@ -1,6 +1,6 @@
 EXAMPLES = sq
 
-CFLAGS = -g
+CFLAGS = -g -Wall
 
 DIFF = diff --strip-trailing-cr
 TEE = cat >

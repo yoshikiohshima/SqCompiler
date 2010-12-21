@@ -5,17 +5,11 @@
 
 FILE *myfile = NULL;
 
-int
-foo(n)
-{
-  return 3 / n;
-}
-
-#define YY_INPUT(buf, result, max_size)        \
-                  {                                              \
-                    int yyc= fgetc(myfile);                          \
-                    result= (EOF == yyc) ? 0 : (*(buf)= yyc, 1); \
-                  }
+#define YY_INPUT(buf, result, max_size)                \
+        {                                              \
+          int yyc= fgetc(myfile);                      \
+          result= (EOF == yyc) ? 0 : (*(buf)= yyc, 1); \
+        }
 
 
 //#define YY_DEBUG
@@ -47,6 +41,7 @@ value
 mk_value(int type, char *string, int integer)
 {
   value v = malloc(sizeof(struct _value));
+  
   v->type = type;
   if (type == SINTEGER) {
     v->size = 0;
@@ -54,7 +49,10 @@ mk_value(int type, char *string, int integer)
   } else if (type == SSTRING || type == SSYMBOL) {
     v->body.string = strdup(string);
     v->size = strlen(string);
+  } else {
+    fprintf(stderr, "unknown type\n");
   }
+ 
   return v;
 }
 
@@ -64,10 +62,11 @@ mk_expression(value e, ...)
   static value value_buffer[200];
   va_list ap;
   int i = 0;
-  value ee;
+  value ee = NULL;
   value v = malloc(sizeof(struct _value));
   v->type = SEXPRESSION;
 
+  v->size = 0;
   va_start(ap, e);
   for (ee = e; ee != NULL; ee = va_arg(ap, value)) {
     value_buffer[i++] = ee;
@@ -113,7 +112,7 @@ mk_empty_symbol()
   char *m = malloc(1000);
   value v = mk_symbol("");
   memset(m, 0, 1000);
-  v->body.string= m;
+  v->body.string = m;
   return v;
 }
 
@@ -170,20 +169,20 @@ void
 print_value(value a)
 {
   if (a->type == SEXPRESSION) {
-    int i;
-    printf("#(");
+    int i = 0;
+    fprintf(stderr, "%d#(", a->size);
     for (i = 0; i < a->size; i++) {
       print_value(a->body.expression[i]);
-      if (i < a->size - 1) printf(" ");
+      if (i < a->size - 1) fprintf(stderr, " ");
     }
-    printf(")");
+    fprintf(stderr, ")");
   }
   else if (a->type == SINTEGER) {
-    printf("%d", a->body.integer);
+    fprintf(stderr, "%d", a->body.integer);
   } else if (a->type == SSTRING) {
-    printf("\'%s\'", a->body.string);
+    fprintf(stderr, "\'%s\'", a->body.string);
   } else if (a->type == SSYMBOL) {
-    printf("#%s", a->body.string);
+    fprintf(stderr, "#%s", a->body.string);
   }
 }
 
@@ -249,12 +248,12 @@ maybe-cascade-head = s:message-send r:new-empty-expression
                      {$$ = expression_copyWith(expression_append(r, mk_list("cascade", s->body.expression[2], NULL)),
                            expression_copyWith(mk_list("cascadeSend", s->body.expression[1], NULL), expression_from_to(s, 3, s->size)))}
 
-variable = i:identifier 					     { $$ = mk_expression(mk_symbol("variable"), i, NULL);}
+variable = i:identifier 					     { $$ = mk_list("variable", i, NULL);}
 
 pseudo-variable = <('self' | 'super')> - 			     { $$ = mk_string(yytext);}
 
-variable-nil = {$$ = mk_expression(mk_symbol("variable"), mk_string("nil"), NULL);}
-return-self = {$$ = mk_expression(mk_symbol("return"), mk_string("self"), NULL);}
+variable-nil = {$$ = mk_list("variable", mk_string("nil"), NULL);}
+return-self = {$$ = mk_list("return", mk_string("self"), NULL);}
 
 integer = s:new-integer b:new-integer ret:new-integer
           ('-' {s->body.integer = -1;} | {s->body.integer = 1;})
@@ -285,14 +284,9 @@ keyword-send = r:binary-argument args:new-empty-expression name:new-empty-symbol
 	       (s:keyword a:binary-argument {symbol_copyWith(name, s); expression_copyWith(args, a); })+
                {$$ = expression_append(mk_list("send", name, r, NULL), args); }
 
-#binary-send = r:unary-argument
-#	        (s:binary-selector a:unary-argument
-#		   {r = mk_list("send", s, r, a, NULL);})+
-#              {$$ = r;}
-
 binary-send = r:unary-argument
-	        s:binary-selector a:unary-argument
-		   {r = mk_list("send", s, r, a, NULL);}
+	        (s:binary-selector a:unary-argument
+		   {r = mk_list("send", s, r, a, NULL);})+
               {$$ = r;}
 
 binary-argument = binary-send | unary-argument
