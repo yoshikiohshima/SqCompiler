@@ -5,12 +5,18 @@
 
 FILE *myfile = NULL;
 
-/*#define YY_INPUT(buf, result, max_size)        \
+int
+foo(n)
+{
+  return 3 / n;
+}
+
+#define YY_INPUT(buf, result, max_size)        \
                   {                                              \
                     int yyc= fgetc(myfile);                          \
                     result= (EOF == yyc) ? 0 : (*(buf)= yyc, 1); \
                   }
-*/
+
 
 //#define YY_DEBUG
 
@@ -33,6 +39,9 @@ typedef struct _value {
 #define SEXPRESSION 4
 
 void print_value(value a);
+value mk_symbol(char *string);
+
+static value result;
 
 value
 mk_value(int type, char *string, int integer)
@@ -52,12 +61,12 @@ mk_value(int type, char *string, int integer)
 value
 mk_expression(value e, ...)
 {
-  static value value_buffer[100];
+  static value value_buffer[200];
   va_list ap;
   int i = 0;
+  value ee;
   value v = malloc(sizeof(struct _value));
   v->type = SEXPRESSION;
-  value ee;
 
   va_start(ap, e);
   for (ee = e; ee != NULL; ee = va_arg(ap, value)) {
@@ -67,6 +76,22 @@ mk_expression(value e, ...)
   v->size = i;
   v->body.expression = malloc(i*sizeof(value));
   memcpy(v->body.expression, value_buffer, i*sizeof(value));
+  return v;
+}
+
+#define mk_list(label, ...) mk_expression(mk_symbol(label), __VA_ARGS__)
+
+value
+expression_from_to(value e, int from, int to)
+{
+  int i;
+  value v = malloc(sizeof(struct _value));
+  v->type= SEXPRESSION;
+  v->size = to - from; 
+  v->body.expression = malloc(sizeof(value) * v->size);
+  for (i = 0; from < to; i++, from++) {
+    v->body.expression[i] = e->body.expression[from];
+  }
   return v;
 }
   
@@ -113,18 +138,31 @@ digitValue(char v)
 }
 
 value
-mk_null()
-{
-  return mk_value(SNULL, NULL, 0);
-}
-
-value
 expression_append(value a, value b)
 {
   value *exp = malloc(sizeof(value*) * (a->size + b->size));
   memcpy(exp, a->body.expression, sizeof(value*) * a->size);
   memcpy(exp+a->size, b->body.expression, sizeof(value*) * b->size);
   a->size += b->size;
+  a->body.expression = exp;
+  return a;
+}
+
+value
+expression_copyWith(value a, value b)
+{
+  value *exp = malloc(sizeof(value*) * (a->size + 1));
+  memcpy(exp, a->body.expression, sizeof(value*) * a->size);
+  exp[a->size] = b;
+  a->body.expression = exp;
+  a->size += 1;
+  return a;
+}
+
+value
+symbol_copyWith(value a, value b)
+{
+  strcat(a->body.string, b->body.string);
   return a;
 }
 
@@ -133,7 +171,7 @@ print_value(value a)
 {
   if (a->type == SEXPRESSION) {
     int i;
-    printf("(");
+    printf("#(");
     for (i = 0; i < a->size; i++) {
       print_value(a->body.expression[i]);
       if (i < a->size - 1) printf(" ");
@@ -151,15 +189,72 @@ print_value(value a)
 
 %}
 
-start = - s:expression						     { print_value(s); printf("\n");}
+start = - r:new-empty-expression (s:start-one {expression_copyWith(r, s);})* -  {result = r;}
 
-expression = v:variable assign u:expression			     { $$ = mk_expression(mk_symbol("assign"), v, u, NULL);}
+start-one = - (c:stamp m:method - '! !' -			        {$$ = mk_list("methodDef", c, m, NULL);}
+	   | class-definition
+	   | init
+	   | doit)
+
+
+doit = <(expression | -)> '!' -						{$$ = mk_list("doit", mk_string(yytext), NULL);}
+init = i:identifier 'initialize!' -					{$$ = mk_list("init", i, NULL);}
+stamp = '!' r:new-empty-symbol s:identifier-name <(' class' | '')>
+             {symbol_copyWith(r, s); symbol_copyWith(r, mk_symbol(yytext));} -
+               'methodsFor:' - (!'!' .)* '!' -				{$$ = r;}
+
+class-definition = p:identifier 'subclass: #' c:identifier 'instanceVariableNames: ' ivar:single-string -
+		     'classVariableNames: ' cvar:single-string - 'poolDictionaries: ' single-string -
+		     'category: ' single-string '!' -
+		   {$$ = mk_list("classDef", p, c, ivar, cvar, NULL);}
+
+method = m:message-pattern t:temporaries primitive? l:method-block {$$ = mk_list("method", m, t, l, NULL);}
+
+method-block = params:block-parameters temps:temporaries (body:expression-list | body:return-self)
+		    {$$ = mk_list("block", params, temps, body, NULL);}
+
+message-pattern = args:new-empty-expression name:new-empty-symbol
+                   (k:keyword i:identifier
+                     {expression_copyWith(args, i);
+		      symbol_copyWith(name, k); })+
+		  {$$ = mk_list("message", name, args, NULL);}
+		| name:binary-selector arg:identifier {$$ = mk_list("message", name, mk_expression(arg, NULL), NULL);}
+		| name:unary-selector {$$ = mk_list("message", name, mk_expression(NULL), NULL);}
+
+block = lbrack v:block-default-nil rbrack {$$ = v;}
+
+block-default-nil = params:block-parameters temps:temporaries (body:expression-list | body:variable-nil)
+		    {$$ = mk_list("block", params, temps, body, NULL);}
+
+
+block-parameters = params:new-empty-expression (b:block-parameter {expression_copyWith(params, b);})+ bar
+		   {$$ = expression_append(mk_list("params", NULL), params);}
+		 | {$$ = mk_list("params", NULL);}
+
+block-parameter = ':' - identifier
+
+temporaries = bar ids:new-empty-expression (id:identifier {expression_copyWith(ids, id);})* bar {$$ = expression_append(mk_list("temps", NULL), ids);}
+	    | {$$ = mk_list("temps", NULL);}
+
+expression = v:variable assign u:expression			     { $$ = mk_list("assign", v, u, NULL);}
+	   | s:maybe-cascade-head (c:cascade {expression_copyWith(s, c);})+ {$$ = s}
 	   | message-send
 	   | primary
+
+expression-list = hat e:expression dot?					{$$ = mk_list("return", e, NULL);}
+	        | e:expression dot l:expression-list			{$$ = mk_list("sequence", e, l, NULL);}
+	        | e:expression dot?					{$$ = e;}
+
+maybe-cascade-head = s:message-send r:new-empty-expression
+                     {$$ = expression_copyWith(expression_append(r, mk_list("cascade", s->body.expression[2], NULL)),
+                           expression_copyWith(mk_list("cascadeSend", s->body.expression[1], NULL), expression_from_to(s, 3, s->size)))}
 
 variable = i:identifier 					     { $$ = mk_expression(mk_symbol("variable"), i, NULL);}
 
 pseudo-variable = <('self' | 'super')> - 			     { $$ = mk_string(yytext);}
+
+variable-nil = {$$ = mk_expression(mk_symbol("variable"), mk_string("nil"), NULL);}
+return-self = {$$ = mk_expression(mk_symbol("return"), mk_string("self"), NULL);}
 
 integer = s:new-integer b:new-integer ret:new-integer
           ('-' {s->body.integer = -1;} | {s->body.integer = 1;})
@@ -167,16 +262,16 @@ integer = s:new-integer b:new-integer ret:new-integer
           {ret->body.integer = 0}
 	  (<[0-9A-Z]>
              {ret->body.integer = ret->body.integer * b->body.integer + digitValue(yytext[0]);})+ - 
-	  {$$ = mk_integer(ret->body.integer * s->body.integer);}
+	  {$$ = mk_list("integer", mk_integer(ret->body.integer * s->body.integer), NULL);}
 new-integer = {$$ = mk_integer(0);}
 
 single-string = "\'" <(!"\'" .)*> "\'"						{$$ = mk_string(yytext);}
 
 selector = keyword-selector | unary-selector | binary-selector
 
-unary-selector = name:identifier-name !':' - 					{$$ = mk_symbol(name->body.string);}
-binary-selector = <binary-character*>	 					{$$ = mk_symbol(yytext);}
-keyword-selector = ret:new-empty-symbol (k:keyword-name {strcat(ret->body.string, k->body.string);})+ {ret->size = strlen(ret->body.string); $$ = ret;}
+unary-selector = name:identifier-name !':' - 					{$$ = mk_symbol(name->body.string); }
+binary-selector = <binary-character+> -	 					{$$ = mk_symbol(yytext); }
+keyword-selector = ret:new-empty-symbol (k:keyword-name {symbol_copyWith(ret, k);})+ - {$$ = ret;}
 binary-character = [-+/\\*~<>=@%|&?,`]
 new-empty-symbol = {$$ = mk_empty_symbol();}
 new-empty-expression = {$$ = mk_expression(NULL);}
@@ -185,17 +280,49 @@ keyword      = k:keyword-name -						      {$$ = k;}
 keyword-name = <(identifier-name ':')>	   	     		 	      {$$ = mk_string(yytext);}
 
 message-send = keyword-send | binary-send | unary-send
+
 keyword-send = r:binary-argument args:new-empty-expression name:new-empty-symbol
-	       (s:keyword a:binary-argument {expression_append(name, s); expression_append(args, a); })+
-               {$$ = expression_append(mk_expression(mk_symbol("send"), name, r, NULL), args); }
-binary-send = r:unary-argument (s:binary-selector a:unary-argument {r = mk_expression(mk_symbol("send"), s, r, a, NULL);})+ {$$ = r;}
+	       (s:keyword a:binary-argument {symbol_copyWith(name, s); expression_copyWith(args, a); })+
+               {$$ = expression_append(mk_list("send", name, r, NULL), args); }
+
+#binary-send = r:unary-argument
+#	        (s:binary-selector a:unary-argument
+#		   {r = mk_list("send", s, r, a, NULL);})+
+#              {$$ = r;}
+
+binary-send = r:unary-argument
+	        s:binary-selector a:unary-argument
+		   {r = mk_list("send", s, r, a, NULL);}
+              {$$ = r;}
+
 binary-argument = binary-send | unary-argument
 unary-argument = unary-send | primary
-unary-send    = r:primary (s:unary-selector {r = mk_expression(mk_symbol("send"), s, r, NULL);})+ {$$ = r;}
+unary-send    = r:primary (s:unary-selector {r = mk_list("send", s, r, NULL);})+ {$$ = r;}
 
-primary = variable | pseudo-variable | literal | (lparen e:expression rparen {$$ = e})
+cascade       = semicolon (s:cascade-unary | s:cascade-binary | s:cascade-keyword) {$$ = expression_append(mk_list("cascadeSend", NULL), s);}
 
-literal = single-string | integer
+cascade-unary  = s:unary-selector {$$ = mk_expression(s, NULL);}
+cascade-binary = s:binary-selector a:binary-argument {$$ = mk_expression(s, a, NULL);}
+cascade-keyword = args:new-empty-expression name:new-empty-symbol
+		  (s:keyword a:binary-argument {symbol_copyWith(name, s); expression_copyWith(args, a); })+
+		  {$$ = expression_append(mk_expression(name, NULL), args);}
+
+array-literal = '#' literal-array
+literal-array = lparen r:new-empty-expression {expression_copyWith(r, mk_symbol("array"));} (a:array-element {expression_copyWith(r, a);})* rparen {$$ = r;}
+array-element = literal | s:selector {$$ = mk_expression(mk_symbol("symbol"), s, NULL);} | literal-array
+
+brace = lbrace e:expression-list rbrace {$$ = mk_list("brace", e, NULL);}
+
+primary = variable | pseudo-variable | literal | block | brace | (lparen e:expression rparen {$$ = e;})
+
+literal = single-string | integer | character-literal | symbol-literal | array-literal
+
+character-literal = '$' <.> - {$$ = mk_list("character", mk_string(yytext), NULL);}
+symbol-literal = '#' (s:selector | s:single-string) {$$ = mk_list("symbol", s, NULL);}
+
+primitive =  langle <(!rangle .)*> rangle {$$ = mk_list("primitive", mk_string(yytext), NULL);}
+
+assign  = ('_' | ':=') -
 
 lbrace = '{' -
 rbrace = '}' -
@@ -212,7 +339,8 @@ rbrack = ']' -
 bar    = '|' -
 hat    = '^' -
 
-assign  = ('_' | ':=') -
+semicolon = ';' - 
+dot = '.' -
 
 identifier-character = [a-zA-Z]
 identifier-rest = [a-zA-Z0-9]
@@ -226,11 +354,42 @@ comment = '\"' <(!'\"' .)*> '\"'						     {$$ = mk_string(yytext);}
 
 %%
 
-int main()
+#ifndef TEST
+int
+main()
 {
-  /*myfile = fopen("test", "r"); */
-  while (yyparse())
-    ; 
-  /* fclose(myfile); */
+  myfile = fopen("c:/Users/ohshima/Documents/Visual Studio 2008/Projects/SqParser/sq/test", "r");
+  if (yyparse()) {
+    fprintf(stderr, "result: %p\n", result);
+    print_value(result);
+  }
+  fclose(myfile);
   return 0;
 }
+
+#else
+int
+main()
+{
+  value value1 = mk_expression(NULL);
+  value value2;
+  value value3 = mk_expression(NULL);
+
+  expression_copyWith(value1, mk_string("abc"));
+  expression_copyWith(value1, mk_string("def"));
+  expression_copyWith(value1, mk_string("ghi"));
+  print_value(value1);
+
+  value2 = expression_from_to(value1, 1, 2);
+
+  expression_copyWith(value2, mk_string("abc"));
+  expression_copyWith(value2, mk_string("def"));
+  expression_copyWith(value2, mk_string("ghi"));
+
+  expression_append(value1, value2);
+  print_value(value1);
+
+  return 0;
+}
+
+#endif

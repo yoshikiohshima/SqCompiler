@@ -1,0 +1,18 @@
+!MCompiler methodsFor: 'public access' stamp: 'yo 12/15/2010 23:46'!
+evaluate: textOrStream in: aContext to: receiver
+
+	| method selector class methodPair v |
+	class _ (aContext == nil ifTrue: [receiver] ifFalse: [aContext receiver]) class.
+	methodPair  := self compileNoPattern: textOrStream in: class context: aContext for: receiver.
+	method _ methodPair first.
+	selector _ aContext isNil
+		ifTrue: [#DoIt]
+		ifFalse: [#DoItIn:].
+	class addSelector: selector withMethod: method.
+	v := aContext isNil
+		ifTrue: [receiver DoIt]
+		ifFalse: [receiver DoItIn: aContext].
+	class removeSelector: selector.
+	^ v.
+! !
+
