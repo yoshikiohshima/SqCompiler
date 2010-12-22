@@ -1,0 +1,610 @@
+%{
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
+FILE *myfile = NULL;
+
+#define YY_INPUT(buf, result, max_size)                \
+        {                                              \
+          int yyc= fgetc(myfile);                      \
+          result= (EOF == yyc) ? 0 : (*(buf)= yyc, 1); \
+        }
+
+
+//#define YY_DEBUG
+
+#define YY_STACK_SIZE 3000
+
+typedef struct _value {
+  int type;
+  int size;
+  int serial;
+  union {
+    char *string;
+    int integer;
+    struct _value **expression;
+  } body;
+} *value;
+
+#define YYSTYPE value
+
+#define SNULL 0
+#define SINTEGER 1
+#define SSTRING 2
+#define SSYMBOL 3
+#define SEXPRESSION 4
+
+void validate_value(value a);
+void print_value(value a);
+value mk_symbol(char *string);
+
+static value parse_result = NULL;
+
+static int serialNumber = 0;
+
+struct _value_list {
+  value v;
+  struct _value_list* next;
+};
+
+static struct _value_list *value_list = NULL;
+
+value
+new_value()
+{
+  value v = malloc(sizeof(struct _value));
+  struct _value_list *new_link = malloc(sizeof(struct _value_list));
+  
+/*  {
+    struct _value_list *n = value_list;
+    while(n != NULL) {
+      validate_value(n->v);
+      n = n->next;
+    }
+  }
+*/
+
+  v->body.expression = NULL;
+  v->body.string = NULL;
+  v->size = 0;
+  v->serial = serialNumber++;
+
+  new_link->next = value_list;
+  new_link->v = v;
+  value_list = new_link;
+
+  return v;
+}
+
+void
+free_values()
+{
+  value v;
+  struct _value_list *l;
+  while(value_list != NULL) {
+    v = value_list->v;
+    if (v->type == SSTRING || v->type == SSYMBOL) {
+      if (v->body.string != NULL) {
+        free(v->body.string);
+      }
+    } else if (v->type == SEXPRESSION) {
+      if (v->body.expression != NULL) {
+        free(v->body.expression);
+      }
+    }
+    free(v);
+    l = value_list;
+    value_list = value_list->next;
+    free(l);
+  }
+}
+
+value
+mk_value(int type, char *string, int integer)
+{
+  value v = new_value();
+  
+  v->type = type;
+  if (type == SINTEGER) {
+    v->body.integer = integer;
+  } else if (type == SSTRING || type == SSYMBOL) {
+    v->body.string = strdup(string);
+  } else {
+    fprintf(stderr, "unknown type\n");
+  }
+  return v;
+}
+
+/*value
+mk_expression(value e, ...)
+{
+  static value value_buffer[200];
+  va_list ap;
+  int i = 0;
+  value ee = NULL;
+  value v = malloc(sizeof(struct _value));
+  v->type = SEXPRESSION;
+  v->size = 0;
+  va_start(ap, e);
+  for (ee = e; ee != NULL; ee = va_arg(ap, value)) {
+    value_buffer[i++] = ee;
+  }
+  va_end(ap);
+  v->size = i;
+  v->body.expression = malloc(i*sizeof(value));
+  memcpy(v->body.expression, value_buffer, i*sizeof(value));
+  return v;
+}*/
+
+value
+mk_expression0()
+{
+  int i = 0;
+  value v = new_value();
+  v->type = SEXPRESSION;
+  v->size = i;
+  return v;
+}
+
+value
+mk_expression1(value e)
+{
+  int i = 1;
+  value v = new_value();
+  v->type = SEXPRESSION;
+  v->size = i;
+  v->body.expression = malloc(i*sizeof(value*));
+  v->body.expression[0] = e;
+  return v;
+}
+
+value
+mk_expression2(value e1, value e2)
+{
+  int i = 2;
+  value v = new_value();
+  v->type = SEXPRESSION;
+  v->size = i;
+  v->body.expression = malloc(i*sizeof(value*));
+  v->body.expression[0] = e1;
+  v->body.expression[1] = e2;
+  return v;
+}
+
+value
+mk_expression3(value e1, value e2, value e3)
+{
+  int i = 3;
+  value v = new_value();
+  v->type = SEXPRESSION;
+  v->size = i;
+  v->body.expression = malloc(i*sizeof(value*));
+  v->body.expression[0] = e1;
+  v->body.expression[1] = e2;
+  v->body.expression[2] = e3;
+  return v;
+}
+
+value
+mk_expression4(value e1, value e2, value e3, value e4)
+{
+  int i = 4;
+  value v = new_value();
+  v->type = SEXPRESSION;
+  v->size = i;
+  v->body.expression = malloc(i*sizeof(value*));
+  v->body.expression[0] = e1;
+  v->body.expression[1] = e2;
+  v->body.expression[2] = e3;
+  v->body.expression[3] = e4;
+  return v;
+}
+
+value
+mk_expression5(value e1, value e2, value e3, value e4, value e5)
+{
+  int i = 5;
+  value v = new_value();
+  v->type = SEXPRESSION;
+  v->size = i;
+  v->body.expression = malloc(i*sizeof(value*));
+  v->body.expression[0] = e1;
+  v->body.expression[1] = e2;
+  v->body.expression[2] = e3;
+  v->body.expression[3] = e4;
+  v->body.expression[4] = e5;
+  return v;
+}
+
+#define mk_list(label, ...) mk_expression(mk_symbol(label), __VA_ARGS__)
+
+value
+expression_from_to(value e, int from, int to)
+{
+  int i;
+  value v = new_value();
+  v->type= SEXPRESSION;
+  v->size = to - from; 
+  v->body.expression = malloc(sizeof(value*) * v->size);
+  for (i = 0; from < to; i++, from++) {
+    v->body.expression[i] = e->body.expression[from];
+  }
+  return v;
+}
+  
+value
+mk_string(char *string)
+{
+  return mk_value(SSTRING, string, 0);
+}
+
+value
+mk_symbol(char *string)
+{
+  return mk_value(SSYMBOL, string, 0);
+}
+
+value
+mk_integer(int v)
+{
+  return mk_value(SINTEGER, NULL, v);
+}
+
+int
+digitValue(char v)
+{
+  if ('0' <= v && v <= '9') {
+    return v - '0';
+  }
+
+  if ('A' <= v && v <= 'Z') {
+    return v - 'A' + 10;
+  }
+
+  return 0;
+}
+
+value
+expression_append(value a, value b)
+{
+  value v;
+  if (a == NULL) {
+    return b;
+  }
+  if (b == NULL) {
+    return a;
+  }
+  v = new_value();
+  v->type = a->type;
+  if (!(a->type == SEXPRESSION && b->type == SEXPRESSION)) {
+    fprintf(stderr, "error\n");
+    exit(2);
+  }
+  v->size = a->size + b->size;
+  v->body.expression = malloc(sizeof(value*) * v->size);
+  memcpy(v->body.expression, a->body.expression, sizeof(value*) * a->size);
+  memcpy(v->body.expression+a->size, b->body.expression, sizeof(value*) * b->size);
+  return v;
+}
+
+value
+expression_copyWith(value a, value b)
+{
+  value v;
+  if (a == NULL) {
+    return b;
+  }
+  if (b == NULL) {
+    return a;
+  }
+  v = new_value();
+  v->type = a->type;
+  v->size = a->size + 1;
+  if (a->type != SEXPRESSION) {
+    fprintf(stderr, "a type%d\n", a->type);
+    exit(1);
+  }
+  v->body.expression = malloc(sizeof(value*) * v->size);
+  memcpy(v->body.expression, a->body.expression, sizeof(value*) * a->size);
+  v->body.expression[a->size] = b;
+  return v;
+}
+
+value
+symbol_copyWith(value a, value b)
+{
+  value v = new_value();
+  char *buf;
+  
+  if ((a->type != SSYMBOL && a->type != SSTRING) || (b->type != SSYMBOL && b->type != SSTRING)) {
+    fprintf(stderr, "error\n");
+    fprintf(stderr, "types %d, %d\n", a->type, b->type);
+    exit(3);
+  }
+  v->type = SSYMBOL;
+  buf = malloc(strlen(a->body.string) + strlen(b->body.string) + 1);
+  strcpy(buf, a->body.string);
+  strcat(buf, b->body.string);
+  v->body.string = buf;
+  return v;
+}
+
+/******************************************************************************
+*  Encoder                                                                    *
+*******************************************************************************/
+
+/*char*
+start(value tree)
+{
+  if (headIs(tree, 'methodDef')) {
+     char *c = first(second(tree));
+     char * meta = second(second(tree));
+     if(strncmp(c, class_name_prefix, strlen(class_name_prefix)) == 0) {
+       c = c + strlen(class_name_prefix);
+       class_name = malloc(strlen(c) + strlen(meta) + 1)
+    
+
+  method1(class
+*/
+
+
+%}
+
+start     = - (s:expression {parse_result = expression_copyWith(parse_result, s);})* -
+
+start-one = -
+            ( c:stamp m:method - '! !' -		        {$$ = mk_expression3(mk_symbol("methodDef"), c, m);}
+	    | class-definition
+	    | init
+	    | doit )
+
+
+doit      = <(expression | -)> '!' -				{$$ = mk_expression2(mk_symbol("doit"), mk_string(yytext));}
+init 	  = i:identifier 'initialize!' -			{$$ = mk_expression2(mk_symbol("init"), i);}
+stamp	  = '!' r:new-empty-symbol s:identifier-name <(' class' | '')>
+             {r = symbol_copyWith(r, s); r = symbol_copyWith(r, mk_symbol(yytext));} -
+               'methodsFor:' - (!'!' .)* '!' -			{$$ = r;}
+
+class-definition = p:identifier 'subclass: #' c:identifier 'instanceVariableNames: ' ivar:single-string
+		     'classVariableNames: ' cvar:single-string - 'poolDictionaries: ' single-string
+		     'category: ' single-string '!'
+		   {$$ = mk_expression5(mk_symbol("classDef"), p, c, ivar, cvar);}
+
+method = m:message-pattern t:temporaries primitive? l:method-block {$$ = mk_expression4(mk_symbol("method"), m, t, l);}
+
+method-block = params:block-parameters temps:temporaries (body:expression-list | body:return-self)
+		    {$$ = mk_expression4(mk_symbol("block"), params, temps, body);}
+
+message-pattern = args:new-empty-expression name:new-empty-symbol
+                   (k:keyword i:identifier
+                     {args = expression_copyWith(args, i);
+		      name = symbol_copyWith(name, k); })+
+		  {$$ = mk_expression3(mk_symbol("message"), name, args);}
+		| name:binary-selector arg:identifier {$$ = mk_expression3(mk_symbol("message"), name, mk_expression1(arg));}
+		| name:unary-selector {$$ = mk_expression3(mk_symbol("message"), name, mk_expression0());}
+
+block       = lbrack v:block-default-nil rbrack {$$ = v;}
+
+block-default-nil = params:block-parameters temps:temporaries (body:expression-list | body:variable-nil)
+		    {$$ = mk_expression4(mk_symbol("block"), params, temps, body);}
+
+
+block-parameters = params:new-empty-expression (b:block-parameter {params = expression_copyWith(params, b);})+ bar
+		   {$$ = expression_append(mk_expression1(mk_symbol("params")), params);}
+		 | {$$ = mk_expression1(mk_symbol("params")); fprintf(stderr, "here\n");}
+
+block-parameter = ':' - identifier
+
+temporaries = bar ids:new-empty-expression (id:identifier {ids = expression_copyWith(ids, id);})* bar { $$ = expression_append(mk_expression1(mk_symbol("temps")), ids);}
+	    | {$$ = mk_expression1(mk_symbol("temps"));}
+
+expression = v:variable assign u:expression			     { $$ = mk_expression3(mk_symbol("assign"), v, u);}
+	   | s:maybe-cascade-head (c:cascade {s = expression_copyWith(s, c);})+ {$$ = s}
+	   | message-send
+	   | primary
+
+expression-list = hat e:expression (dot | -)				{$$ = mk_expression2(mk_symbol("return"), e);}
+	        | e:expression dot l:expression-list			{$$ = mk_expression3(mk_symbol("sequence"), e, l);}
+	        | e:expression dot?					{$$ = e;}
+
+maybe-cascade-head = s:message-send r:new-empty-expression
+                     {$$ = expression_copyWith(expression_append(r, mk_expression2(mk_symbol("cascade"), s->body.expression[2])),
+                           expression_copyWith(mk_expression2(mk_symbol("cascadeSend"), s->body.expression[1]), expression_from_to(s, 3, s->size)))}
+
+variable = i:identifier 					     { $$ = mk_expression2(mk_symbol("variable"), i);}
+
+pseudo-variable = <('self' | 'super')> - 			     { $$ = mk_string(yytext);}
+
+variable-nil = {$$ = mk_expression2(mk_symbol("variable"), mk_string("nil"));}
+return-self  = {$$ = mk_expression2(mk_symbol("return"), mk_string("self"));}
+
+integer = s:new-integer b:new-integer ret:new-integer
+          ('-' {s->body.integer = -1;} | {s->body.integer = 1;})
+          (<([0-9][0-9] | [0-9])> 'r' {b->body.integer = atoi(yytext);} | - {b->body.integer = 10;})
+          {ret->body.integer = 0}
+	  (<[0-9A-Z]>
+             {ret->body.integer = ret->body.integer * b->body.integer + digitValue(yytext[0]);})+ - 
+	  {$$ = mk_expression2(mk_symbol("integer"), mk_integer(ret->body.integer * s->body.integer));}
+new-integer = {$$ = mk_integer(0);}
+
+single-string = "\'" <(!"\'" .)*> "\'"	-					{$$ = mk_string(yytext);}
+
+selector = keyword-selector | unary-selector | binary-selector
+
+unary-selector = <identifier-name> !':' - 					{$$ = mk_symbol(yytext); }
+binary-selector = <binary-character+> -	 					{$$ = mk_symbol(yytext); }
+keyword-selector = ret:new-empty-symbol (k:keyword-name {ret = symbol_copyWith(ret, k);})+ - {$$ = ret;}
+binary-character = [-+/\\*~<>=@%|&?,`]
+new-empty-symbol = {$$ = mk_symbol("");}
+new-empty-expression = {$$ = mk_expression0();}
+
+keyword      = k:keyword-name -						      {$$ = k;}
+keyword-name = <(identifier-name ':')>	   	     		 	      {$$ = mk_string(yytext);}
+
+message-send = keyword-send | binary-send | unary-send
+
+keyword-send = r:binary-argument args:new-empty-expression name:new-empty-symbol
+	       (s:keyword a:binary-argument {name = symbol_copyWith(name, s); args = expression_copyWith(args, a); })+
+               {$$ = expression_append(mk_expression3(mk_symbol("send"), name, r), args); }
+
+binary-send = r:unary-argument
+	        (s:binary-selector a:unary-argument
+		   {r = mk_expression4(mk_symbol("send"), s, r, a);})+
+              {$$ = r;}
+
+binary-argument = binary-send | unary-argument
+unary-argument = unary-send | primary
+unary-send    = r:primary (s:unary-selector {r = mk_expression3(mk_symbol("send"), s, r);})+ {$$ = r;}
+
+cascade       = semicolon (s:cascade-unary | s:cascade-binary | s:cascade-keyword) {$$ = expression_append(mk_expression1(mk_symbol("cascadeSend")), s);}
+
+cascade-unary  = s:unary-selector {$$ = mk_expression1(s);}
+cascade-binary = s:binary-selector a:binary-argument {$$ = mk_expression2(s, a);}
+cascade-keyword = args:new-empty-expression name:new-empty-symbol
+		  (s:keyword a:binary-argument {name = symbol_copyWith(name, s); args = expression_copyWith(args, a); })+
+		  {$$ = expression_append(mk_expression1(name), args);}
+
+array-literal = '#' literal-array
+literal-array = lparen r:new-empty-expression {r = expression_copyWith(r, mk_symbol("array"));} (a:array-element {r = expression_copyWith(r, a);})* rparen {$$ = r;}
+array-element = literal | s:selector {$$ = mk_expression2(mk_symbol("symbol"), s);} | literal-array
+
+brace = lbrace e:expression-list rbrace {$$ = mk_expression2(mk_symbol("brace"), e);}
+
+primary =  (lparen e:expression rparen {$$ = e;}) | block | brace | variable | pseudo-variable | literal
+
+literal = single-string | integer | character-literal | symbol-literal | array-literal
+
+character-literal = '$' <.> - {$$ = mk_expression2(mk_symbol("character"), mk_string(yytext));}
+symbol-literal = '#' (s:selector | s:single-string) {$$ = mk_expression2(mk_symbol("symbol"), s); print_value(s);}
+
+primitive =  langle <(!rangle .)*> rangle {$$ = mk_expression2(mk_symbol("primitive"), mk_string(yytext));}
+
+assign  = ('_' | ':=') -
+
+lbrace = '{' -
+rbrace = '}' -
+
+langle = '<' -
+rangle = '>' -
+
+lparen = '(' -
+rparen = ')' -
+
+lbrack = '[' -
+rbrack = ']' -
+
+bar    = '|' -
+hat    = '^' -
+
+semicolon = ';' - 
+dot = '.' -
+
+identifier-character = [a-zA-Z]
+identifier-rest = [a-zA-Z0-9]
+identifier-name = <identifier-character identifier-rest*>			     {$$ = mk_string(yytext);}
+
+identifier = i:identifier-name -						     {$$ = i;}
+
+comment = '\"' <(!'\"' .)*> '\"'						     {$$ = mk_string(yytext);}
+
+-     = ([ \t\n\r] | comment)*
+
+%%
+
+void
+validate_value(value a)
+{
+  int i;
+  if (a->type == SEXPRESSION) {
+    for (i = 0; i < a->size; i++) {
+      if (&(a->body.expression[i]) - a->body.expression > 1000) {
+        fprintf(stderr, "wrong entry\n");
+        exit(1);
+      }
+      validate_value(a->body.expression[i]);
+    }
+  }
+  else if (a->type == SINTEGER) {
+    if (a->size != 0) {
+      fprintf(stderr, "integer corrupted\n");
+      exit(8);
+    }
+  } else if (a->type == SSTRING || a->type == SSYMBOL) {
+    for (i = 0; i < strlen(a->body.string); i++) {
+      if (a->body.string[i] < 0) {
+        fprintf(stderr, "string corrupted\n");
+        fprintf(stderr, "%d %d %d %s\n", i, strlen(a->body.string), a->serial, a->body.string);
+        exit(8);
+      }
+    }
+  } else {
+    fprintf(stderr, "really corrupted\n");
+    fprintf(stderr, "%p, %d\n", a, a->type);
+    exit(8);
+  }
+}
+
+void
+print_value(value a)
+{
+/*  fprintf(stderr, "yyval - yyvals = %d\n", yyval - yyvals); */
+  if (a->type == SEXPRESSION) {
+    int i = 0;
+    fprintf(stderr, "#(");
+    for (i = 0; i < a->size; i++) {
+      print_value(a->body.expression[i]);
+      if (i < a->size - 1) fprintf(stderr, " ");
+    }
+    fprintf(stderr, ")");
+  }
+  else if (a->type == SINTEGER) {
+    fprintf(stderr, "%d", a->body.integer);
+  } else if (a->type == SSTRING) {
+    fprintf(stderr, "\'%s\'", a->body.string);
+  } else if (a->type == SSYMBOL) {
+    fprintf(stderr, "#%s", a->body.string);
+  }
+}
+
+
+
+#ifndef TEST
+int
+main()
+{
+  GREG g;
+  memset(&g, 0, sizeof(GREG));
+  myfile = fopen("c:/Users/ohshima/Documents/Visual Studio 2008/Projects/SqParser/sq/test", "r");
+  if (yyparse(&g)) {
+    fprintf(stderr, "result: %p\n", parse_result);
+    if (parse_result) {print_value(parse_result);}
+  }
+  fclose(myfile);
+  return 0;
+}
+
+#else
+
+value
+foo(value v, int i)
+{
+  int origI = i;
+  while (i-- > 0) {
+     v = expression_append(mk_expression2(mk_symbol("variable"), mk_string("456")), v);
+  }
+  if (origI > 0) 
+    v = foo(v, origI - 1);
+  return v;
+}
+
+int
+main()
+{
+  parse_result = mk_expression0();
+  parse_result = foo(parse_result, 3);
+  print_value(parse_result);
+  return 0;
+}
+
+#endif
