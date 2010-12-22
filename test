@@ -1,2 +1,41 @@
-(token == #- 
+'From Moshi of 3 March 2007 [latest update: #1912] on 20 December 2010 at 10:45:24 pm'!
+
+!MScanner methodsFor: 'expression types' stamp: 'yo 11/11/2010 16:28'!
+scanLitVec
+
+	| s |
+	s _ WriteStream on: (Array new: 16).
+	[tokenType = #rightParenthesis or: [tokenType = #doIt]]
+		whileFalse: 
+			[tokenType = #leftParenthesis
+				ifTrue: 
+					[self scanToken; scanLitVec]
+				ifFalse: 
+					[tokenType = #word | (tokenType = #keyword) | (tokenType = #colon)
+						ifTrue: 
+							[self scanLitWord.
+							token = #true ifTrue: [token _ true].
+							token = #false ifTrue: [token _ false].
+							token = #nil ifTrue: [token _ nil]]
+						ifFalse:
+							[(token == #- 
 									and: [((typeTable at: hereChar asciiValue ifAbsent: [#xLetter])) = #xDigit])
+								ifTrue: 
+									[self scanToken.
+									token _ token negated]]].
+			s nextPut: token.
+			self scanToken].
+	token _ s contents! !
+
+!MScanner methodsFor: 'expression types' stamp: 'yo 11/9/2010 20:58  <  yo 8/28/2002 17:52'!
+scanLitWord
+	"Accumulate keywords and asSymbol the result."
+
+	| t |
+	[(typeTable at: hereChar asciiValue ifAbsent: [#xLetter]) = #xLetter] whileTrue: [
+		t _ token.
+		self xLetter.
+		token _ t , token
+	].
+	token _ token asSymbol.
+! !

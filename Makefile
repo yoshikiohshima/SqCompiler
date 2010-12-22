@@ -2,6 +2,8 @@ EXAMPLES = sq
 
 CFLAGS = -g -Wall -O3
 
+CC = gcc
+
 DIFF = diff --strip-trailing-cr
 TEE = cat >
 
