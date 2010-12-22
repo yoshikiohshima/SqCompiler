@@ -17,7 +17,6 @@ all : $(EXAMPLES)
 sq : .FORCE
 	../greg -o sq.greg.c sq.greg
 	$(CC) $(CFLAGS) -o $@ sq.greg.c 
-	./$@
 
 clean : .FORCE
 	rm -f *~ *.o *.[pl]eg.[cd] $(EXAMPLES)
