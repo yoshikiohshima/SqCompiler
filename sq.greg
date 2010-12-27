@@ -57,7 +57,6 @@ typedef struct _value {
 #define SCODE 7
 
 void validate_value(value a);
-void print_value(value a);
 value mk_symbol(uchar *string);
 value mk_assoc(uchar *string);
 value mk_char(uchar c);
@@ -108,7 +107,7 @@ free_values()
   struct _value_list *l;
   while(value_list != NULL) {
     v = value_list->v;
-    if (v->type == SSTRING || v->type == SSYMBOL || v->type == SASSOC) {
+    if (v->type == SSTRING || v->type == SSYMBOL || v->type == SASSOC || v->type == SCODE) {
       if (v->body.string != NULL) {
         free(v->body.string);
       }
@@ -121,6 +120,78 @@ free_values()
     l = value_list;
     value_list = value_list->next;
     free(l);
+  }
+}
+
+void
+validate_value(value a)
+{
+  int i;
+  if (a->type == SEXPRESSION) {
+    for (i = 0; i < a->size; i++) {
+      if (&(a->body.expression[i]) - a->body.expression > 1000) {
+        fprintf(stderr, "wrong entry\n");
+        exit(1);
+      }
+      validate_value(a->body.expression[i]);
+    }
+  }
+  else if (a->type == SINTEGER) {
+    if (a->size != 0) {
+      fprintf(stderr, "integer corrupted\n");
+      exit(1);
+    }
+  } else if (a->type == SSTRING || a->type == SSYMBOL || a->type == SASSOC) {
+    if (a->size != strlen(a->body.string)) {
+      fprintf(stderr, "size mismatch\n");
+    }
+    for (i = 0; i < a->size; i++) {
+      if (a->body.string[i] > 127) {
+        fprintf(stderr, "string corrupted\n");
+        fprintf(stderr, "%d %d %d %s\n", i, a->size, a->serial, a->body.string);
+        exit(1);
+      }
+    }
+  } else {
+    fprintf(stderr, "really corrupted\n");
+    fprintf(stderr, "%p, %d\n", a, a->type);
+    exit(1);
+  }
+}
+
+int code_binary = 1;
+
+void
+print_value(value a)
+{
+  int i = 0;
+  if (a->type == SEXPRESSION) {
+    fprintf(output, "#(");
+    for (i = 0; i < a->size; i++) {
+      print_value(a->body.expression[i]);
+      if (i < a->size - 1) fprintf(output, " ");
+    }
+    fprintf(output, ")");
+  } else if (a->type == SINTEGER) {
+    fprintf(output, "%d", a->body.integer);
+  } else if (a->type == SSTRING) {
+    fprintf(output, "\'%s\'", a->body.string);
+  } else if (a->type == SSYMBOL) {
+    fprintf(output, "#%s", a->body.string);
+  } else if (a->type == SASSOC) {
+    fprintf(output, "#%s->%s", a->body.string, a->body.string);
+  } else if (a->type == SCODE) {
+    if (code_binary) {
+      fwrite(a->body.string, 1, a->size, output);
+    } else {
+      int i;
+      fprintf(output, "[");
+      for (i = 0; i < a->size - 1; i++) {
+        fprintf(output, "16r%X", a->body.string[i]);
+        fprintf(output, ", ");
+      }
+      fprintf(output, "16r%X]", a->body.string[a->size-1]);
+    }
   }
 }
 
@@ -137,6 +208,7 @@ mk_value(int type, uchar *string, int integer)
     v->body.integer = integer;
   } else if (type == SSTRING || type == SSYMBOL || type == SASSOC) {
     v->body.string = strdup(string);
+    v->size = strlen(string);
   } else if (type == SCODE) {
     v->body.string = malloc(integer);
     memcpy(v->body.string, string, integer);
@@ -288,7 +360,7 @@ digitValue(uchar v)
 value
 code_append(value a, value b)
 {
-  static uchar code[10000];
+  static uchar code[10240];
   if (a == NULL || b == NULL) {
     fprintf(stderr, "null value for append\n");
     exit(1);
@@ -358,16 +430,19 @@ symbol_copy_with(value a, value b)
 {
   value v = new_value();
   uchar *buf;
+  int new_size;
   
   if ((a->type != SSYMBOL && a->type != SSTRING) || (b->type != SSYMBOL && b->type != SSTRING)) {
     fprintf(stderr, "error in symbol copy_with\n");
     exit(1);
   }
   v->type = SSYMBOL;
-  buf = malloc(strlen(a->body.string) + strlen(b->body.string) + 1);
+  new_size = a->size + b->size;
+  buf = malloc(new_size + 1);
   strcpy(buf, a->body.string);
   strcat(buf, b->body.string);
   v->body.string = buf;
+  v->size = new_size;
   return v;
 }
 
@@ -392,7 +467,6 @@ static value special_variables = NULL;
 static value special_selectors = NULL;
 
 value emit_integer(int v);
-
 
 #define LdInstType 1
 #define	LdTempType 2
@@ -446,10 +520,7 @@ equals(value a, value b)
   }
   if (a->type == SINTEGER || a->type == SCHAR) {
     return a->body.integer == b->body.integer;
-  }
-  if (a->type == SSYMBOL || a->type == SSTRING || a->type == SASSOC) {
-    return (strlen(a->body.string) == strlen(b->body.string)) && (0 == strcmp(a->body.string, b->body.string));
-  } else if (a->type == SCODE) {
+  } else if (a->type == SCODE || a->type == SSYMBOL || a->type == SSTRING || a->type == SASSOC) {
     return (a->size == b->size) && (strncmp(a->body.string, b->body.string, a->size) == 0);
   } else if (a->type == SEXPRESSION) {
     int i;
@@ -525,6 +596,16 @@ string_of(value e)
   exit(1);
 }
 
+int
+integer_of(value e)
+{
+  if (e->type == SINTEGER) {
+    return e->body.integer;
+  }
+  fprintf(stderr, "integer_of\n");
+  exit(1);
+}
+
 uchar*
 code_of(value e)
 {
@@ -534,6 +615,9 @@ code_of(value e)
   fprintf(stderr, "code_of\n");
   exit(1);
 }
+
+#define NextPutAll(buffer, pos, v) do {pos = next_put_all(buffer, pos, v);} while(0)
+#define NextPut(buffer, pos, v) do {pos = next_put(buffer, pos, v);} while(0)
 
 int
 next_put(uchar* buffer, int pos, uchar v)
@@ -545,15 +629,10 @@ next_put(uchar* buffer, int pos, uchar v)
 int
 next_put_all(uchar* buffer, int pos, value v)
 {
-  int size = 0;
-  if (v->type == SCODE) {
+  if (v->type == SCODE || v->type == SSTRING || v->type == SSYMBOL || v->type == SASSOC) {
     memcpy(buffer+pos, v->body.string, v->size);
-    size = v->size;
-  } else if (v->type == SSTRING || v->type == SSYMBOL || v->type == SASSOC) {
-    size = strlen(string_of(v));
-    memcpy(buffer+pos, string_of(v), size);
   }
-  return pos + size;
+  return pos + v->size;
 }
 
 value
@@ -591,27 +670,27 @@ emit_variable_long(int mode, int code)
   }
 
   if (index <= 63) {
-    pos = next_put(aStream, pos, mode);
-    pos = next_put(aStream, pos, type * 64 + index);
+    NextPut(aStream, pos, mode);
+    NextPut(aStream, pos, type * 64 + index);
     return mk_code(aStream, pos);
   }
   // "Compile for Double-exetended Do-anything instruction..."
   if (mode == LoadLong) {
-    pos = next_put(aStream, pos, DblExtDoAll);
-    pos = next_put(aStream, pos, temp1[type]);
-    pos = next_put(aStream, pos, index);
+    NextPut(aStream, pos, DblExtDoAll);
+    NextPut(aStream, pos, temp1[type]);
+    NextPut(aStream, pos, index);
     return mk_code(aStream, pos);
   }
   if (mode == Store) {
-    pos = next_put(aStream, pos, DblExtDoAll);
-    pos = next_put(aStream, pos, temp2[type]);
-    pos = next_put(aStream, pos, index);
+    NextPut(aStream, pos, DblExtDoAll);
+    NextPut(aStream, pos, temp2[type]);
+    NextPut(aStream, pos, index);
     return mk_code(aStream, pos);
   }
   if (mode == StorePop) {
-   pos = next_put(aStream, pos, DblExtDoAll);
-   pos = next_put(aStream, pos, temp3[type]);
-   pos = next_put(aStream, pos, index);
+   NextPut(aStream, pos, DblExtDoAll);
+   NextPut(aStream, pos, temp3[type]);
+   NextPut(aStream, pos, index);
    return mk_code(aStream, pos);
   }
   return NULL;
@@ -621,19 +700,16 @@ value
 emit_store_pop_variable(int code)
 {
   if (0 <= code && code <= 7) {
-    uchar c[1];
-    c[0] = ShortStoP + code;
+    uchar c[1] = {ShortStoP + code};
     return mk_code(c, 1); //"short stopop inst"
   }
   if (16 <= code && code <= 23) {
-    uchar c[1];
-    c[0] = ShortStoP + 8 + code - 16;
+    uchar c[1] = {ShortStoP + 8 + code - 16};
     return mk_code(c, 1); // "short stopop temp"
   }
   if (code >= 256 && (code % 256 > 63 && (code / 256 == 4))) {
-    uchar d[1];
-    d[0] = Pop;
-    return code_append(emit_variable_long(Store, code), mk_code(d, 1));
+    uchar c[1] = {Pop};
+    return code_append(emit_variable_long(Store, code), mk_code(c, 1));
   } else {
     return emit_variable_long(StorePop, code);
   }
@@ -646,12 +722,8 @@ block_temp_code(value arg)
 }
 
 value
-emit_jump_long(int dist, int long_code)
+emit_jump_long(int distance, int code)
 {
-  uchar aStream[2];
-  int pos = 0;
-  int code = long_code;
-  int distance = dist;
   if (distance < 0) {
     distance = distance + 1024;
     code = code - 4;
@@ -662,10 +734,9 @@ emit_jump_long(int dist, int long_code)
     fprintf(stderr, "A block compiles more than 1K bytes of code\n");
     exit(1);
   } else {
-    pos = next_put(aStream, pos, distance / 256 + code);
-    pos = next_put(aStream, pos, distance % 256);
+    uchar aStream[2] = {distance / 256 + code, distance % 256};
+    return mk_code(aStream, 2);
   }
-  return mk_code(aStream, pos);
 }
 
 value
@@ -675,10 +746,10 @@ emit_block(value block, value args, value returns)
   int pos = 0;
   value t;
   value args_code;
-  pos = next_put(aStream, pos, LdThisContext);
+  NextPut(aStream, pos, LdThisContext);
   t = emit_integer(args->size);
-  pos = next_put_all(aStream, pos, t);
-  pos = next_put(aStream, pos, 0xC8); // "send blockCopy"
+  NextPutAll(aStream, pos, t);
+  NextPut(aStream, pos, 0xC8); // "send blockCopy"
   args_code = mk_code("", 0);
   if (args->size == 0) {
   } else {
@@ -688,13 +759,13 @@ emit_block(value block, value args, value returns)
     }
   }
   t = emit_jump_long(block->size + args_code->size + ((returns->type != SNULL) ? returns->size : 1), JmpLong);
-  pos = next_put_all(aStream, pos, t);
-  pos = next_put_all(aStream, pos, args_code);
-  pos = next_put_all(aStream, pos, block);
+  NextPutAll(aStream, pos, t);
+  NextPutAll(aStream, pos, args_code);
+  NextPutAll(aStream, pos, block);
   if (returns == NULL || returns->type == SNULL) {
-    pos = next_put(aStream, pos, EndRemote);
+    NextPut(aStream, pos, EndRemote);
   } else {
-    pos = next_put_all(aStream, pos, returns);
+    NextPutAll(aStream, pos, returns);
   }
   return mk_code(aStream, pos);
 }
@@ -752,10 +823,10 @@ emit_send(int code, int nArgs, int supered)
   int index;
   if (!supered && (code - Send < SendLimit && nArgs < 3)) {
     if (code < Send) {
-      pos = next_put(aStream, pos, code);
+      NextPut(aStream, pos, code);
       return mk_code(aStream, pos);
     } else {
-      pos = next_put(aStream, pos, nArgs * 16 + code);
+      NextPut(aStream, pos, nArgs * 16 + code);
       return mk_code(aStream, pos);
     }
   }
@@ -763,29 +834,28 @@ emit_send(int code, int nArgs, int supered)
   index = code < 256 ? code - Send : code % 256;
   if (index <= 31 && nArgs <= 7) {
     //"extended (2-byte) send [131 and 133]"
-    pos = next_put(aStream, pos, SendLong + (supered ? 2 : 0));
-    pos = next_put(aStream, pos, nArgs * 32 + index);
+    NextPut(aStream, pos, SendLong + (supered ? 2 : 0));
+    NextPut(aStream, pos, nArgs * 32 + index);
     return mk_code(aStream, pos);
   }
   if (!supered && (index <= 63 && nArgs <= 3)) {
     // "new extended (2-byte) send [134]"
-    pos = next_put(aStream, pos, SendLong2);
-    pos = next_put(aStream, pos, nArgs * 64 + index);
+    NextPut(aStream, pos, SendLong2);
+    NextPut(aStream, pos, nArgs * 64 + index);
     return mk_code(aStream, pos);
   }
   // "long (3-byte) send"
-  pos = next_put(aStream, pos, DblExtDoAll);
-  pos = next_put(aStream, pos, nArgs + (supered ? 32 : 0));
-  pos = next_put(aStream, pos, index);
+  NextPut(aStream, pos, DblExtDoAll);
+  NextPut(aStream, pos, nArgs + (supered ? 32 : 0));
+  NextPut(aStream, pos, index);
   return mk_code(aStream, pos);
 }
 
 value
 emit_jump_short_or_long(int dist, int short_code)
 {
-  uchar strm[1];
   if (1 <= dist && dist <= JmpLimit) {
-    strm[0] = short_code + dist - 1;
+    uchar strm[1] = {short_code + dist - 1};
     return mk_code(strm, 1);
   }
 
@@ -802,16 +872,27 @@ emit_branch_on(int condition, int dist)
   }
   return (condition ? emit_jump_long(dist, BtpLong) : emit_jump_short_or_long(dist, Bfp));
 }
-   
+
+void
+push_block_temps()
+{
+  blockTemps = expression_append(mk_expression1(mk_integer(temporaries->size)), blockTemps);
+}
+
+void
+pop_block_temps()
+{
+  int n = integer_of(first(blockTemps));
+  blockTemps = expression_from_to(blockTemps, 1, blockTemps->size);
+  temporaries = expression_from_to(temporaries, 0, n);
+}
 
 /******************************************************************************
-*  Encoder                                                                    *
+*  Encoders                                                                   *
 *******************************************************************************/
 
 value encode(value tree);
-value sequence1(value tree);
-
-value generate_class_def(value c, value p, value iCol, value cCol);
+value sequence(value tree);
 
 value
 assign(value tree)
@@ -842,7 +923,7 @@ assign(value tree)
 value
 integer(value v)
 {
-   return emit_integer(second(v)->body.integer);
+   return emit_integer(integer_of(second(v)));
 }
 
 value
@@ -875,20 +956,6 @@ params(value tree)
   return expression_from_to(tree, 1, tree->size);
 }
 
-void
-push_block_temps()
-{
-  blockTemps = expression_append(mk_expression1(mk_integer(temporaries->size)), blockTemps);
-}
-
-void
-pop_block_temps()
-{
-  int n = first(blockTemps)->body.integer;
-  blockTemps = expression_from_to(blockTemps, 1, blockTemps->size);
-  temporaries = expression_from_to(temporaries, 0, n);
-}
-
 value
 encode_return(value tree)
 {
@@ -911,7 +978,7 @@ block_inline(value tree)
   		    ? temporaries->size + arguments->size : maxTemporaries;
 
   if (equals(first(fourth(tree)), mk_symbol("sequence"))) {
-    v = sequence1(fourth(tree));
+    v = sequence(fourth(tree));
   } else if (equals(first(fourth(tree)), mk_symbol("return"))) {
     v = mk_expression(mk_code("", 0), encode_return(fourth(tree)), NULL);
   } else {
@@ -921,8 +988,6 @@ block_inline(value tree)
   pop_block_temps();
   return code_append(first(v), (second(v)->type == SNULL ? mk_code("", 0) : second(v)));
 }
-  
-  
 
 value
 block(value tree)
@@ -939,7 +1004,7 @@ block(value tree)
   		    ? temporaries->size + arguments->size : maxTemporaries;
 
   if (equals(first(fourth(tree)), mk_symbol("sequence"))) {
-    v = sequence1(fourth(tree));
+    v = sequence(fourth(tree));
   } else if (equals(first(fourth(tree)), mk_symbol("return"))) {
     v = mk_expression(mk_code("", 0), encode_return(fourth(tree)), NULL);
   } else {
@@ -1017,19 +1082,19 @@ emit_if(value tree)
     int s = (f == NULL || f->size == 0) ? 1 : f->size;
     value false_code = emit_jump_short_or_long(s, Jmp);
     
-    pos = next_put_all(ret, pos, r);
+    NextPutAll(ret, pos, r);
     s = (t == NULL || t->size == 0) ? 1 : t->size;
-    pos = next_put_all(ret, pos, emit_branch_on(0, s + false_code->size));
+    NextPutAll(ret, pos, emit_branch_on(0, s + false_code->size));
     if (t == NULL || t->size == 0) {
-      pos = next_put(ret, pos, LdNil);
+      NextPut(ret, pos, LdNil);
     } else {
-      pos = next_put_all(ret, pos, t);
+      NextPutAll(ret, pos, t);
     }
-    pos = next_put_all(ret, pos, false_code);
+    NextPutAll(ret, pos, false_code);
     if (f == NULL || f->size == 0) {
-      pos = next_put(ret, pos, LdNil);
+      NextPut(ret, pos, LdNil);
     } else {
-      pos = next_put_all(ret, pos, f);
+      NextPutAll(ret, pos, f);
     }
     return mk_code(ret, pos);
   }    
@@ -1051,16 +1116,16 @@ emit_while(value tree)
     if (tree->size == 4) {
        body = block_inline(fourth(tree));
     }
-    pos = next_put_all(ret, pos, r);
+    NextPutAll(ret, pos, r);
     if (body == NULL || body->size == 0) {
-      pos = next_put_all(ret, pos, emit_branch_on(strcmp(sel, "whileFalse") == 0, 2));
+      NextPutAll(ret, pos, emit_branch_on(strcmp(sel, "whileFalse") == 0, 2));
     } else {
-      pos = next_put_all(ret, pos, emit_branch_on(strcmp(sel, "whileFalse:") == 0, body->size + 3));
-      pos = next_put_all(ret, pos, body);
-      pos = next_put(ret, pos, Pop);
+      NextPutAll(ret, pos, emit_branch_on(strcmp(sel, "whileFalse:") == 0, body->size + 3));
+      NextPutAll(ret, pos, body);
+      NextPut(ret, pos, Pop);
     }
-    pos = next_put_all(ret, pos, emit_jump_short_or_long(0 - pos - 2, Jmp));
-    pos = next_put(ret, pos, LdNil);
+    NextPutAll(ret, pos, emit_jump_short_or_long(0 - pos - 2, Jmp));
+    NextPut(ret, pos, LdNil);
     return mk_code(ret, pos);
   }
   return NULL;
@@ -1119,13 +1184,13 @@ cascade(value tree)
   for (i = 2; i < tree->size; i++) {
     rest->body.expression[i-2] = encode(expression_at(tree, i));
   }
-  pos = next_put_all(ret, pos, rec);
+  NextPutAll(ret, pos, rec);
   for (i = 0; i < rest->size - 1; i++) {
-    pos = next_put(ret, pos, Dup);
-    pos = next_put_all(ret, pos, expression_at(rest, i));
-    pos = next_put(ret, pos, Pop);
+    NextPut(ret, pos, Dup);
+    NextPutAll(ret, pos, expression_at(rest, i));
+    NextPut(ret, pos, Pop);
   }
-  pos = next_put_all(ret, pos, expression_at(rest, rest->size - 1));
+  NextPutAll(ret, pos, expression_at(rest, rest->size - 1));
   return mk_code(ret, pos);
 }
 
@@ -1212,7 +1277,7 @@ sequence(value tree)
   value r;
   
   if (equals(first(third(tree)), mk_symbol("sequence"))) {
-    r = sequence1(third(tree));
+    r = sequence(third(tree));
     return mk_expression(code_append(l1, first(r)), second(r), NULL);
   } else if (equals(first(third(tree)), mk_symbol("return"))) {
     r = encode_return(third(tree));
@@ -1224,17 +1289,11 @@ sequence(value tree)
 }
 
 value
-sequence1(value tree)
-{
-  return sequence(tree);
-}
-
-value
 encodeMethodBlock(value tree)
 {
   value v;
   if (equals(first(fourth(tree)), mk_symbol("sequence"))) {
-    return sequence1(fourth(tree));
+    return sequence(fourth(tree));
   } else if (equals(first(fourth(tree)), mk_symbol("return"))) {
     v = encode(fourth(tree));
     return mk_expression(mk_code("", 0), v, NULL);
@@ -1261,19 +1320,13 @@ method(value tree)
   return code_append(first(e), tail);
 }
 
-value
-method1(value tree)
-{
-  return method(tree);
-}
-  
 static value Smalltalk = NULL;
 value lookup_all_inst_vars(uchar *s);
 void add_inst_vars(uchar *s, uchar *p, value l);
 value generate_method(value bytes);
 value generate_doit(value str);
 value generate_init(value str);
-
+value generate_class_def(value c, value p, value iCol, value cCol);
 
 value
 encode_start(value tree)
@@ -1297,7 +1350,7 @@ encode_start(value tree)
     strcpy(class_name, c);
     strcat(class_name, meta);
     inst_vars = expression_from_to(third(tree), 1, third(tree)->size);
-    m = method1(fourth(tree));
+    m = method(fourth(tree));
     literals = expression_copy_with(literals, message);
     literals = expression_copy_with(literals, mk_assoc(class_name));
     return generate_method(code_append(m, mk_code(trailer, 4)));
@@ -1320,7 +1373,7 @@ value
 scan_variables(uchar *s)
 {
   value l = mk_expression0();
-  uchar buf[200];
+  uchar buf[2000];
   int size = strlen(s);
   int start = 0;
   int i = 0;
@@ -1419,11 +1472,218 @@ value
 doit_cpy(char *inbuf, value s, value e)
 {
   uchar buf[10240];
-  int start = s->body.integer;
-  int end = e->body.integer;
+  int start = integer_of(s);
+  int end = integer_of(e);
   strncpy(buf, inbuf+start, end-start);
   buf[end-start] = 0;
   return mk_string(buf);
+}
+
+/******************************************************************************
+*  Generators                                                                 *
+*******************************************************************************/
+
+#define INIT 248
+#define DOIT 250
+#define METHODDEF 252
+#define CLASSDEF 254
+
+uchar collection[10240];
+static int max_pos;
+static int current_pos;
+
+int
+round_up_to(int i)
+{
+  return i + (4 - (i % 4)) % 4;
+}
+
+void
+int32(int i)
+{
+  collection[current_pos++] = ((i >> 24) & 0xFF);
+  collection[current_pos++] = ((i >> 16) & 0xFF);
+  collection[current_pos++] = ((i >>  8) & 0xFF);
+  collection[current_pos++] = ((i >>  0) & 0xFF);
+}
+
+void
+generate_string(uchar *v, int size)
+{
+  int32(size);
+  memcpy(collection+current_pos, v, size);
+  current_pos = current_pos + size;
+  while (current_pos % 4) {
+    collection[current_pos++] = 0;
+  }
+}
+
+void
+generate_string_value(value vv)
+{
+  if (vv->type == SCODE || vv->type == SSTRING || vv->type == SSYMBOL || vv->type == SASSOC) {
+    generate_string(vv->body.string, vv->size);
+  }
+}
+
+int
+generate_literal(value lit)
+{
+  int pos;
+  if (lit->type == SEXPRESSION) {
+     int i;
+     int *new_array;
+     pos = current_pos;
+     new_array = malloc(lit->size * 4);
+     current_pos = current_pos + (lit->size + 1) * 4;
+     max_pos = current_pos;
+     for (i = 0; i < lit->size; i++) {
+       current_pos = max_pos;
+       new_array[i] = generate_literal(expression_at(lit, i));
+     }
+     current_pos = pos;
+     int32(lit->size);
+     for (i = 0; i < lit->size; i++) {
+       int32(new_array[i]);
+     }
+     max_pos = max_pos > current_pos ? max_pos : current_pos;
+     free(new_array);
+     return ((pos & 0xFFFFFF) << 8) + 6;
+  } else if (lit->type == SINTEGER) {
+     return (lit->body.integer << 1) + 1;
+  } else if (lit->type == SASSOC) {
+     pos = current_pos;
+     generate_string_value(lit);
+     max_pos = max_pos > current_pos ? max_pos : current_pos;
+     return (pos << 8) + 0;
+  } else if (lit->type == SSTRING) {
+     pos = current_pos;
+     generate_string_value(lit);
+     max_pos = max_pos > current_pos ? max_pos : current_pos;
+     return (pos << 8) + 2;
+  } else if (lit->type == SSYMBOL) {
+     pos = current_pos;
+     generate_string_value(lit);
+     max_pos = max_pos > current_pos ? max_pos : current_pos;
+     return (pos << 8) + 4;
+  } else if (lit->type == SCHAR) {
+     return (lit->body.integer << 8) + 14;
+  }
+  return -1;
+}
+
+value
+generate_class_def(value c, value p, value iCol, value cCol)
+{
+  value cn;
+  value pn;
+  value code;
+  uchar iv[2000];
+  uchar cv[2000];
+  int i;
+  int size;
+  int pos;
+  if (strncmp(string_of(c), class_name_prefix, strlen(class_name_prefix)) == 0) {
+    cn = mk_string(string_of(c) + strlen(class_name_prefix));
+  } else {
+    cn = c;
+  }
+
+  if (strncmp(string_of(p), class_name_prefix, strlen(class_name_prefix)) == 0) {
+    pn = mk_string(string_of(p) + strlen(class_name_prefix));
+  } else {
+    pn = p;
+  }
+
+  pos = 0;
+  iv[0] = 0;
+  for (i = 0; i < iCol->size; i++) {
+    NextPutAll(iv, pos, expression_at(iCol, i));
+    NextPut(iv, pos, ' ');
+  }
+  if (iCol->size > 0) {iv[pos-1] = 0;}
+
+  pos = 0;
+  cv[0] = 0;
+  for (i = 0; i < cCol->size; i++) {
+    NextPutAll(cv, pos, expression_at(cCol, i));
+    NextPut(cv, pos, ' ');
+  }
+  if (cCol->size > 0) {cv[pos-1] = 0;}
+
+  size = 4 +
+         4 + round_up_to(pn->size) + 
+	 4 + round_up_to(cn->size) +
+ 	 4 + round_up_to(strlen(iv)) +
+	 4 + round_up_to(strlen(cv));
+
+  current_pos = max_pos = 0;
+  int32((size << 8) + CLASSDEF);
+  generate_string_value(pn);
+  generate_string_value(cn);
+  generate_string(iv, strlen(iv));
+  generate_string(cv, strlen(cv));
+  code = mk_code(collection, size);
+  return code;
+}
+
+value
+generate_doit(value str)
+{
+  int size = 4 + 4 + round_up_to(str->size);
+  value code;
+
+  current_pos = max_pos = 0;
+  int32((size << 8) + DOIT);
+  generate_string_value(str);
+  code = mk_code(collection, size);
+  return code;
+}
+
+value
+generate_init(value str)
+{
+  int size = 4 + 4 + round_up_to(str->size);
+  value code;
+
+  current_pos = max_pos = 0;
+  int32((size << 8) + INIT);
+  generate_string_value(str);
+  code = mk_code(collection, size);
+  return code;
+}
+
+value
+generate_method(value bytes)
+{
+  int size;
+  value literal_bytes;
+  value code;
+  int header;
+  max_pos = current_pos = 0;
+  generate_literal(literals);
+  literal_bytes = mk_code(collection, max_pos);
+  size = 4 + 4 +
+         4 + round_up_to(strlen(class_name)) +
+         4 + round_up_to(message->size) +
+         4 + round_up_to(bytes->size) +
+         4 + round_up_to(literal_bytes->size);
+
+  max_pos = current_pos = 0;
+  header = (arguments->size << 24) + 
+           (maxTemporaries << 18) +
+           (1 << 17) +
+           (literals->size << 9) +
+           0;
+  
+  int32((size << 8) + METHODDEF);
+  int32(header);
+  generate_string(class_name, strlen(class_name));
+  generate_string_value(message);
+  generate_string_value(bytes);
+  generate_string_value(literal_bytes);
+  code = mk_code(collection, size);
+  return code;
 }
 
 %}
@@ -1606,281 +1866,6 @@ comment   = '\"' (!'\"' .)* '\"'
 
 %%
 
-void
-validate_value(value a)
-{
-  int i;
-  if (a->type == SEXPRESSION) {
-    for (i = 0; i < a->size; i++) {
-      if (&(a->body.expression[i]) - a->body.expression > 1000) {
-        fprintf(stderr, "wrong entry\n");
-        exit(1);
-      }
-      validate_value(a->body.expression[i]);
-    }
-  }
-  else if (a->type == SINTEGER) {
-    if (a->size != 0) {
-      fprintf(stderr, "integer corrupted\n");
-      exit(1);
-    }
-  } else if (a->type == SSTRING || a->type == SSYMBOL) {
-    for (i = 0; i < strlen(a->body.string); i++) {
-      if (a->body.string[i] > 127) {
-        fprintf(stderr, "string corrupted\n");
-        fprintf(stderr, "%d %d %d %s\n", i, strlen(a->body.string), a->serial, a->body.string);
-        exit(1);
-      }
-    }
-  } else {
-    fprintf(stderr, "really corrupted\n");
-    fprintf(stderr, "%p, %d\n", a, a->type);
-    exit(1);
-  }
-}
-
-int code_binary = 1;
-
-void
-print_value(value a)
-{
-  int i = 0;
-  if (a->type == SEXPRESSION) {
-    fprintf(output, "#(");
-    for (i = 0; i < a->size; i++) {
-      print_value(a->body.expression[i]);
-      if (i < a->size - 1) fprintf(output, " ");
-    }
-    fprintf(output, ")");
-  } else if (a->type == SINTEGER) {
-    fprintf(output, "%d", a->body.integer);
-  } else if (a->type == SSTRING) {
-    fprintf(output, "\'%s\'", a->body.string);
-  } else if (a->type == SSYMBOL) {
-    fprintf(output, "#%s", a->body.string);
-  } else if (a->type == SASSOC) {
-    fprintf(output, "#%s->%s", a->body.string, a->body.string);
-  } else if (a->type == SCODE) {
-    if (code_binary) {
-      fwrite(code_of(a), 1, a->size, output);
-    } else {
-      int i;
-      fprintf(output, "[");
-      for (i = 0; i < a->size - 1; i++) {
-        fprintf(output, "16r%X", a->body.string[i]);
-        fprintf(output, ", ");
-      }
-      fprintf(output, "16r%X]", a->body.string[a->size-1]);
-    }
-  }
-}
-
-int
-round_up_to(int i)
-{
-  return i + (4 - (i % 4)) % 4;
-}
-
-#define INIT 248
-#define DOIT 250
-#define METHODDEF 252
-#define CLASSDEF 254
-
-uchar collection[10240];
-static int max_pos;
-static int current_pos;
-
-void
-int32(int i)
-{
-  collection[current_pos++] = ((i >> 24) & 0xFF);
-  collection[current_pos++] = ((i >> 16) & 0xFF);
-  collection[current_pos++] = ((i >>  8) & 0xFF);
-  collection[current_pos++] = ((i >>  0) & 0xFF);
-}
-
-void
-generate_string(uchar *v, int size)
-{
-  int32(size);
-  memcpy(collection+current_pos, v, size);
-  current_pos = current_pos + size;
-  while (current_pos % 4) {
-    collection[current_pos++] = 0;
-  }
-}
-
-void
-generate_string_value(value vv)
-{
-  if (vv->type == SCODE) {
-    generate_string(code_of(vv), vv->size);
-  } else {
-    generate_string(string_of(vv), strlen(string_of(vv)));
-  }
-}
-
-int
-generate_literal(value lit)
-{
-  int pos;
-  if (lit->type == SEXPRESSION) {
-     int i;
-     int *new_array;
-     pos = current_pos;
-     new_array = malloc(lit->size * 4);
-     current_pos = current_pos + (lit->size + 1) * 4;
-     max_pos = current_pos;
-     for (i = 0; i < lit->size; i++) {
-       current_pos = max_pos;
-       new_array[i] = generate_literal(expression_at(lit, i));
-     }
-     current_pos = pos;
-     int32(lit->size);
-     for (i = 0; i < lit->size; i++) {
-       int32(new_array[i]);
-     }
-     max_pos = max_pos > current_pos ? max_pos : current_pos;
-     free(new_array);
-     return ((pos & 0xFFFFFF) << 8) + 6;
-  } else if (lit->type == SINTEGER) {
-     return (lit->body.integer << 1) + 1;
-  } else if (lit->type == SASSOC) {
-     pos = current_pos;
-     generate_string_value(lit);
-     max_pos = max_pos > current_pos ? max_pos : current_pos;
-     return (pos << 8) + 0;
-  } else if (lit->type == SSTRING) {
-     pos = current_pos;
-     generate_string_value(lit);
-     max_pos = max_pos > current_pos ? max_pos : current_pos;
-     return (pos << 8) + 2;
-  } else if (lit->type == SSYMBOL) {
-     pos = current_pos;
-     generate_string_value(lit);
-     max_pos = max_pos > current_pos ? max_pos : current_pos;
-     return (pos << 8) + 4;
-  } else if (lit->type == SCHAR) {
-     return (lit->body.integer << 8) + 14;
-  }
-  return -1;
-}
-
-value
-generate_class_def(value c, value p, value iCol, value cCol)
-{
-  value cn;
-  value pn;
-  value code;
-  uchar iv[512];
-  uchar cv[512];
-  int i;
-  int size;
-  int pos;
-  if (strncmp(string_of(c), class_name_prefix, strlen(class_name_prefix)) == 0) {
-    cn = mk_string(string_of(c) + strlen(class_name_prefix));
-  } else {
-    cn = c;
-  }
-
-  if (strncmp(string_of(p), class_name_prefix, strlen(class_name_prefix)) == 0) {
-    pn = mk_string(string_of(p) + strlen(class_name_prefix));
-  } else {
-    pn = p;
-  }
-
-  pos = 0;
-  iv[0] = 0;
-  for (i = 0; i < iCol->size; i++) {
-    pos = next_put_all(iv, pos, expression_at(iCol, i));
-    pos = next_put(iv, pos, ' ');
-  }
-  if (iCol->size > 0) {iv[pos-1] = 0;}
-
-  pos = 0;
-  cv[0] = 0;
-  for (i = 0; i < cCol->size; i++) {
-    pos = next_put_all(cv, pos, expression_at(cCol, i));
-    pos = next_put(cv, pos, ' ');
-  }
-  if (cCol->size > 0) {cv[pos-1] = 0;}
-
-  size = 4 +
-         4 + round_up_to(strlen(string_of(pn))) + 
-	 4 + round_up_to(strlen(string_of(cn))) +
- 	 4 + round_up_to(strlen(iv)) +
-	 4 + round_up_to(strlen(cv));
-
-  current_pos = max_pos = 0;
-  int32((size << 8) + 254);
-  generate_string_value(pn);
-  generate_string_value(cn);
-  generate_string(iv, strlen(iv));
-  generate_string(cv, strlen(cv));
-  code = mk_code(collection, size);
-  return code;
-}
-
-value
-generate_doit(value str)
-{
-  int size = 4 + 4 + round_up_to(strlen(string_of(str)));
-  value code;
-
-  current_pos = max_pos = 0;
-  int32((size << 8) + 250);
-  generate_string(string_of(str), strlen(string_of(str)));
-  code = mk_code(collection, size);
-  return code;
-}
-
-value
-generate_init(value str)
-{
-  int size = 4 + 4 + round_up_to(strlen(string_of(str)));
-  value code;
-
-  current_pos = max_pos = 0;
-  int32((size << 8) + 248);
-  generate_string(string_of(str), strlen(string_of(str)));
-  code = mk_code(collection, size);
-  return code;
-}
-
-value
-generate_method(value bytes)
-{
-  int size;
-  value literal_bytes;
-  value code;
-  int header;
-  max_pos = current_pos = 0;
-  generate_literal(literals);
-  literal_bytes = mk_code(collection, max_pos);
-  size = 4 + 4 +
-         4 + round_up_to(strlen(class_name)) +
-         4 + round_up_to(strlen(string_of(message))) +
-         4 + round_up_to(bytes->size) +
-         4 + round_up_to(literal_bytes->size);
-
-  max_pos = current_pos = 0;
-  header = (arguments->size << 24) + 
-           (maxTemporaries << 18) +
-           (1 << 17) +
-           (literals->size << 9) +
-           0;
-  
-  int32((size << 8) + 252);
-  int32(header);
-  generate_string(class_name, strlen(class_name));
-  generate_string_value(message);
-  generate_string_value(bytes);
-  generate_string_value(literal_bytes);
-  code = mk_code(collection, size);
-  return code;
-}
-
-#ifndef TEST
 int main(int argc, char **argv)
 {
   GREG g;
@@ -1945,15 +1930,3 @@ int main(int argc, char **argv)
 
   return 0;
 }
-
-#else
-
-int
-main()
-{
-  parse_result = mk_expression0();
-  print_value(parse_result);
-  return 0;
-}
-
-#endif
