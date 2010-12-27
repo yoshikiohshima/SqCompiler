@@ -1,5 +1,3 @@
-EXAMPLES = sq
-
 CFLAGS = -g -Wall -O3
 
 CC = gcc
@@ -7,20 +5,26 @@ CC = gcc
 DIFF = diff --strip-trailing-cr
 TEE = cat >
 
-all : $(EXAMPLES)
+all : sq
 
 #sq : .FORCE
 #	../leg -v -o sq.leg.c sq.leg
 #	$(CC) $(CFLAGS) -o $@ sq.leg.c 
 #	./$@
 
-sq : .FORCE
-	../greg -o sq.greg.c sq.greg
-	$(CC) $(CFLAGS) -o $@ sq.greg.c 
+.SUFFIXES:
+
+sq : sq.greg
+	../greg -o sqgreg.c sq.greg
+	$(CC) $(CFLAGS) -o sq sqgreg.c 
 
 clean : .FORCE
 	rm -f *~ *.o *.[pl]eg.[cd] $(EXAMPLES)
 
 spotless : clean
+
+test: sq
+	./sq test.st x
+	[ "`md5sum x`" = '6868b1f027d30aaf580c0a7e48bee3d1 *x' ]
 
 .FORCE :

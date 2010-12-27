@@ -386,7 +386,7 @@ value message;
 value blockTemps;
 int maxTemporaries;
 
-uchar class_name_prefix[200];
+uchar class_name_prefix[10];
 
 static value special_variables = NULL;
 static value special_selectors = NULL;
@@ -1388,13 +1388,6 @@ lookup_all_inst_vars(uchar *s)
 encoder
 lookup_encoder(uchar *s)
 {
-//   static struct _encoder_entry table[]
-//     = {{"array", array}, {"assign", assign}, {"block", block},
-//        {"cascade", cascade}, {"cascadeSend", cascadeSend},
-//        {"character", character}, {"integer", integer}, {"method", method},
-//        {"return", return}, {"send", send}, {"sequence", sequence},
-//        {"string", string}, {"symbol", symbol}, {"variable", variable}};
-
 # define E(v) {#v, v}
   static struct _encoder_entry table[] = {
     E(array), E(assign), E(block), E(cascade), E(cascadeSend), E(character), E(integer), E(method), E(send), E(sequence), E(string), E(symbol), E(variable)
@@ -1422,20 +1415,31 @@ encode(value e)
    return (*f)(e);
 }
 
+value
+doit_cpy(char *inbuf, value s, value e)
+{
+  uchar buf[10240];
+  int start = s->body.integer;
+  int end = e->body.integer;
+  strncpy(buf, inbuf+start, end-start);
+  buf[end-start] = 0;
+  return mk_string(buf);
+}
 
 %}
 
 start     = - s:start-one {parse_result = s;} -
 
-start-one = -
+start-one = 
             ( l:new-empty-expression
 	      c:stamp m:method '! !' -                          {l = lookup_all_inst_vars(string_of(symbol_copy_with(first(c), second(c))));
 	      	      	       	     				 $$ = mk_list("methodDef", c, expression_append(mk_list("instVars", NULL), l), m, NULL);}
-            | c:class-definition			        
+            | class-definition
             | init
             | doit )
-
-doit      = <(expression | -)> '!' -                            {$$ = mk_list("doit", mk_string(yytext), NULL);}
+doit      = s:doit-s (expression | -) e:doit-e '!' -            {$$ = mk_list("doit", doit_cpy(G->buf, s, e), NULL);}
+doit-s    = <->    	       	    	     	 	        {$$ = mk_integer(thunk->end);}
+doit-e    = <-> 						{$$ = mk_integer(thunk->begin);}
 init      = i:identifier 'initialize!' -                        {$$ = mk_list("init", i, NULL);}
 stamp     = '!' s:identifier-name <(' class' | '')>
               -
@@ -1807,7 +1811,6 @@ generate_class_def(value c, value p, value iCol, value cCol)
  	 4 + round_up_to(strlen(iv)) +
 	 4 + round_up_to(strlen(cv));
 
-//  collection = malloc(size*2);
   current_pos = max_pos = 0;
   int32((size << 8) + 254);
   generate_string_value(pn);
@@ -1815,7 +1818,6 @@ generate_class_def(value c, value p, value iCol, value cCol)
   generate_string(iv, strlen(iv));
   generate_string(cv, strlen(cv));
   code = mk_code(collection, size);
-//  free(collection);
   return code;
 }
 
@@ -1825,12 +1827,10 @@ generate_doit(value str)
   int size = 4 + 4 + round_up_to(strlen(string_of(str)));
   value code;
 
-//  collection = malloc(size);
   current_pos = max_pos = 0;
   int32((size << 8) + 250);
   generate_string(string_of(str), strlen(string_of(str)));
   code = mk_code(collection, size);
-//  free(collection);
   return code;
 }
 
@@ -1840,12 +1840,10 @@ generate_init(value str)
   int size = 4 + 4 + round_up_to(strlen(string_of(str)));
   value code;
 
-//  collection = malloc(size);
   current_pos = max_pos = 0;
   int32((size << 8) + 248);
   generate_string(string_of(str), strlen(string_of(str)));
   code = mk_code(collection, size);
-//  free(collection);
   return code;
 }
 
@@ -1856,7 +1854,6 @@ generate_method(value bytes)
   value literal_bytes;
   value code;
   int header;
-//  collection = malloc(4096);
   max_pos = current_pos = 0;
   generate_literal(literals);
   literal_bytes = mk_code(collection, max_pos);
@@ -1866,8 +1863,6 @@ generate_method(value bytes)
          4 + round_up_to(bytes->size) +
          4 + round_up_to(literal_bytes->size);
 
-//  free(collection);
-//  collection = malloc(size);
   max_pos = current_pos = 0;
   header = (arguments->size << 24) + 
            (maxTemporaries << 18) +
@@ -1882,7 +1877,6 @@ generate_method(value bytes)
   generate_string_value(bytes);
   generate_string_value(literal_bytes);
   code = mk_code(collection, size);
-//  free(collection);
   return code;
 }
 
