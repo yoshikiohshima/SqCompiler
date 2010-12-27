@@ -31,9 +31,7 @@ FILE *output = NULL;
         }
 
 //#define YY_DEBUG
-
 #define YY_STACK_SIZE 1000
-
 #define YY_MEMOIZATION
 
 typedef struct _value {
@@ -226,6 +224,24 @@ mk_string(uchar *string)
 }
 
 value
+mk_unquote_string(uchar *string)
+{
+  uchar n[10240];
+ 
+  int i = 0, j = 0;
+  n[0] = 0;
+  while (string[i]) {
+    if (string[i] == '\'' && string[i+1] == '\'') {
+      n[j++] = '\''; i+=2;
+    } else {
+      n[j++] = string[i++];
+    }
+  }
+  n[j] = 0;
+  return mk_string(n);
+}
+
+value
 mk_symbol(uchar *string)
 {
   return mk_value(SSYMBOL, string, 0);
@@ -412,6 +428,16 @@ static const unsigned int CodeLimits[] ={-1, 16, 16, 32, 32, 16};
 #define	Send 208
 #define	SendLimit 16
 
+value
+expression_at(value l, int i)
+{
+  if (l->type != SEXPRESSION) {
+    fprintf(stderr, "expression_at\n");
+    exit(1);
+  }
+  return l->body.expression[i];
+}
+
 int
 equals(value a, value b)
 {
@@ -425,7 +451,14 @@ equals(value a, value b)
     return (strlen(a->body.string) == strlen(b->body.string)) && (0 == strcmp(a->body.string, b->body.string));
   } else if (a->type == SCODE) {
     return (a->size == b->size) && (strncmp(a->body.string, b->body.string, a->size) == 0);
- }
+  } else if (a->type == SEXPRESSION) {
+    int i;
+    if (a->size != b->size) return 0;
+    for (i = 0; i < a->size; i++) {
+      if (!equals(expression_at(a, i), expression_at(b, i))) return 0;
+    }
+    return 1;
+  }
   return 0;
 }
 
@@ -434,7 +467,7 @@ index_of(value list, value e)
 {
   int i;
   for (i = 0; i < list->size; i++) {
-    if (equals(list->body.expression[i], e)) {
+    if (equals(expression_at(list, i), e)) {
       return i + 1;
     }
   }
@@ -450,16 +483,6 @@ litIndex(value v)
    }
    literals = expression_copy_with(literals, v);
    return literals->size - 1;
-}
-
-value
-expression_at(value l, int i)
-{
-  if (l->type != SEXPRESSION) {
-    fprintf(stderr, "expression_at\n");
-    exit(1);
-  }
-  return l->body.expression[i];
 }
 
 value
@@ -495,7 +518,7 @@ fifth(value l)
 uchar*
 string_of(value e)
 {
-  if (e->type == SSTRING || e->type == SSYMBOL) {
+  if (e->type == SSTRING || e->type == SSYMBOL || e->type == SASSOC) {
     return e->body.string;
   }
   fprintf(stderr, "string_of\n");
@@ -520,9 +543,16 @@ next_put(uchar* buffer, int pos, uchar v)
 }
 
 int
-next_put_all(uchar* buffer, int pos, uchar *v, int size)
+next_put_all(uchar* buffer, int pos, value v)
 {
-  memcpy(buffer+pos, v, size);
+  int size = 0;
+  if (v->type == SCODE) {
+    memcpy(buffer+pos, v->body.string, v->size);
+    size = v->size;
+  } else if (v->type == SSTRING || v->type == SSYMBOL || v->type == SASSOC) {
+    size = strlen(string_of(v));
+    memcpy(buffer+pos, string_of(v), size);
+  }
   return pos + size;
 }
 
@@ -647,7 +677,7 @@ emit_block(value block, value args, value returns)
   value args_code;
   pos = next_put(aStream, pos, LdThisContext);
   t = emit_integer(args->size);
-  pos = next_put_all(aStream, pos, code_of(t), t->size);
+  pos = next_put_all(aStream, pos, t);
   pos = next_put(aStream, pos, 0xC8); // "send blockCopy"
   args_code = mk_code("", 0);
   if (args->size == 0) {
@@ -658,13 +688,13 @@ emit_block(value block, value args, value returns)
     }
   }
   t = emit_jump_long(block->size + args_code->size + ((returns->type != SNULL) ? returns->size : 1), JmpLong);
-  pos = next_put_all(aStream, pos, code_of(t), t->size);
-  pos = next_put_all(aStream, pos, code_of(args_code), args_code->size);
-  pos = next_put_all(aStream, pos, code_of(block), block->size);
-  if (returns->type == SNULL) {
+  pos = next_put_all(aStream, pos, t);
+  pos = next_put_all(aStream, pos, args_code);
+  pos = next_put_all(aStream, pos, block);
+  if (returns == NULL || returns->type == SNULL) {
     pos = next_put(aStream, pos, EndRemote);
   } else {
-    pos = next_put_all(aStream, pos, code_of(returns), returns->size);
+    pos = next_put_all(aStream, pos, returns);
   }
   return mk_code(aStream, pos);
 }
@@ -774,19 +804,14 @@ emit_branch_on(int condition, int dist)
 }
    
 
-value
-class_def(value c, value p, value iv, value cv)
-{
-  return mk_code("", 0);
-}
-
-
 /******************************************************************************
 *  Encoder                                                                    *
 *******************************************************************************/
 
 value encode(value tree);
 value sequence1(value tree);
+
+value generate_class_def(value c, value p, value iCol, value cCol);
 
 value
 assign(value tree)
@@ -795,7 +820,7 @@ assign(value tree)
   uchar *vv = string_of(v);
   value e = encode(third(tree));
   int ind;
-  uchar code = 0;
+  int code = 0;
 
   if ('A' <= vv[0] && vv[0] <= 'Z') {
     code = litIndex(mk_assoc(vv)) + CodeBases[LdLitIndType];
@@ -932,13 +957,13 @@ variable(value tree)
   value v = second(tree);
   uchar *vv = string_of(v);
   int ind;
-  
+
   if ('A' <= vv[0] && vv[0] <= 'Z') {
     ind = litIndex(mk_assoc(vv));
     return emit_load(ind + CodeBases[LdLitIndType]);
   }
   if ((ind = index_of(special_variables, v)) > 0) {
-    static uchar sp[] = {LdSelf, LdThisContext, LdSuper, LdNil, LdFalse};
+    static uchar sp[] = {LdSelf, LdThisContext, LdSuper, LdNil, LdFalse, LdTrue};
     return mk_code(sp + (ind - 1), 1);
   }
   if ((ind = index_of(arguments, v)) > 0) {
@@ -990,23 +1015,21 @@ emit_if(value tree)
     uchar ret[4096];
     int pos = 0;
     int s = (f == NULL || f->size == 0) ? 1 : f->size;
-    value temp;
     value false_code = emit_jump_short_or_long(s, Jmp);
     
-    pos = next_put_all(ret, pos, code_of(r), r->size);
+    pos = next_put_all(ret, pos, r);
     s = (t == NULL || t->size == 0) ? 1 : t->size;
-    temp = emit_branch_on(0, s + false_code->size);
-    pos = next_put_all(ret, pos, code_of(temp), temp->size);
+    pos = next_put_all(ret, pos, emit_branch_on(0, s + false_code->size));
     if (t == NULL || t->size == 0) {
       pos = next_put(ret, pos, LdNil);
     } else {
-      pos = next_put_all(ret, pos, code_of(t), t->size);
+      pos = next_put_all(ret, pos, t);
     }
-    pos = next_put_all(ret, pos, code_of(false_code), false_code->size);
+    pos = next_put_all(ret, pos, false_code);
     if (f == NULL || f->size == 0) {
       pos = next_put(ret, pos, LdNil);
     } else {
-      pos = next_put_all(ret, pos, code_of(f), f->size);
+      pos = next_put_all(ret, pos, f);
     }
     return mk_code(ret, pos);
   }    
@@ -1020,7 +1043,6 @@ emit_while(value tree)
   int pos = 0;
   value r;
   value body = NULL;
-  value temp;
   if (strcmp(sel, "whileTrue:") == 0 ||
       strcmp(sel, "whileFalse:") == 0 ||
       strcmp(sel, "whileTrue") == 0 ||
@@ -1029,18 +1051,15 @@ emit_while(value tree)
     if (tree->size == 4) {
        body = block_inline(fourth(tree));
     }
-    pos = next_put_all(ret, pos, code_of(r), r->size);
+    pos = next_put_all(ret, pos, r);
     if (body == NULL || body->size == 0) {
-      temp = emit_branch_on(strcmp(sel, "whileFalse") == 0, 2);
-      pos = next_put_all(ret, pos, code_of(temp), temp->size);
+      pos = next_put_all(ret, pos, emit_branch_on(strcmp(sel, "whileFalse") == 0, 2));
     } else {
-      temp = emit_branch_on(strcmp(sel, "whileFalse:") == 0, body->size + 3);
-      pos = next_put_all(ret, pos, code_of(temp), temp->size);
-      pos = next_put_all(ret, pos, code_of(body), body->size);
+      pos = next_put_all(ret, pos, emit_branch_on(strcmp(sel, "whileFalse:") == 0, body->size + 3));
+      pos = next_put_all(ret, pos, body);
       pos = next_put(ret, pos, Pop);
     }
-    temp = emit_jump_short_or_long(0 - pos - 2, Jmp);
-    pos = next_put_all(ret, pos, code_of(temp), temp->size);
+    pos = next_put_all(ret, pos, emit_jump_short_or_long(0 - pos - 2, Jmp));
     pos = next_put(ret, pos, LdNil);
     return mk_code(ret, pos);
   }
@@ -1100,20 +1119,45 @@ cascade(value tree)
   for (i = 2; i < tree->size; i++) {
     rest->body.expression[i-2] = encode(expression_at(tree, i));
   }
-  pos = next_put_all(ret, pos, code_of(rec), rec->size);
+  pos = next_put_all(ret, pos, rec);
   for (i = 0; i < rest->size - 1; i++) {
     pos = next_put(ret, pos, Dup);
-    pos = next_put_all(ret, pos, code_of(expression_at(rest, i)), expression_at(rest, i)->size);
+    pos = next_put_all(ret, pos, expression_at(rest, i));
     pos = next_put(ret, pos, Pop);
   }
-  pos = next_put_all(ret, pos, code_of(expression_at(rest, rest->size - 1)), expression_at(rest, rest->size - 1)->size);
+  pos = next_put_all(ret, pos, expression_at(rest, rest->size - 1));
   return mk_code(ret, pos);
+}
+
+value
+array_encode(value tree)
+{
+  if (equals(first(tree), mk_symbol("array"))) {
+    int i;
+    value ret = mk_expression_size(tree->size - 1);
+    for (i = 0; i < tree->size - 1; i++) {
+      ret->body.expression[i] = array_encode(expression_at(tree, i+1));
+    }
+    return ret;
+  } else if (equals(first(tree), mk_symbol("symbol"))) {
+    return second(tree);
+  } else if (equals(first(tree), mk_symbol("string"))) {
+    return second(tree);
+  } else if (equals(first(tree), mk_symbol("integer"))) {
+    return second(tree);
+  }
+  return NULL;
 }
 
 value
 array(value tree)
 {
-  return emit_lit_variable(tree);
+  value ret = mk_expression_size(tree->size - 1);
+  int i;
+  for (i = 0; i < tree->size -1; i++) {
+   ret->body.expression[i] = array_encode(expression_at(tree, i+1));
+  }
+  return emit_lit_variable(ret);
 }
 
 value
@@ -1226,6 +1270,10 @@ method1(value tree)
 static value Smalltalk = NULL;
 value lookup_all_inst_vars(uchar *s);
 void add_inst_vars(uchar *s, uchar *p, value l);
+value generate_method(value bytes);
+value generate_doit(value str);
+value generate_init(value str);
+
 
 value
 encode_start(value tree)
@@ -1236,8 +1284,9 @@ encode_start(value tree)
     value iv = fourth(tree);
     value cv = fifth(tree);
     add_inst_vars(string_of(c), string_of(p), iv);
-    return class_def(c, p, iv, cv);
+    return generate_class_def(c, p, iv, cv);
   } else if (equals(first(tree), mk_symbol("methodDef"))) {
+    uchar trailer[4] = {0, 0, 0, 0};
     value m;
     uchar *c = string_of(first(second(tree)));
     uchar * meta = string_of(second(second(tree)));
@@ -1251,7 +1300,11 @@ encode_start(value tree)
     m = method1(fourth(tree));
     literals = expression_copy_with(literals, message);
     literals = expression_copy_with(literals, mk_assoc(class_name));
-    return m;
+    return generate_method(code_append(m, mk_code(trailer, 4)));
+  } else if (equals(first(tree), mk_symbol("doit"))) {
+    return generate_doit(second(tree));
+  } else if (equals(first(tree), mk_symbol("init"))) {
+    return generate_init(second(tree));
   }
   return NULL;
 }
@@ -1456,7 +1509,7 @@ integer           = s:new-integer b:new-integer ret:new-integer
                                 {$$ = mk_list("integer", mk_integer(ret->body.integer * s->body.integer), NULL);}
 new-integer       = {$$ = mk_integer(0);}
 
-single-string     = "\'" <(!"\'" . | "\'\'")*> "\'" -                         {$$ = mk_string(yytext);}
+single-string     = "\'" <(!"\'" . | "\'\'")*> "\'" -                         {$$ = mk_unquote_string(yytext);}
 
 selector          = keyword-selector | unary-selector | binary-selector
 
@@ -1514,8 +1567,8 @@ primary           = (lparen e:expression rparen {$$ = e;})
 
 literal           = i:single-string {$$ = mk_list("string", i);} | integer | character-literal | symbol-literal | array-literal
 
-character-literal = '$' <.> - {$$ = mk_list("character", mk_string(yytext), NULL);}
-symbol-literal    = '#' (s:selector | s:single-string) {$$ = mk_list("symbol", s, NULL);}
+character-literal = '$' <.> - {$$ = mk_list("character", mk_char(yytext[0]), NULL);}
+symbol-literal    = '#' (s:selector | s:single-string) {$$ = mk_list("symbol", mk_symbol(string_of(s)), NULL);}
 
 identifier-character = [a-zA-Z]
 identifier-rest = [a-zA-Z0-9]
@@ -1543,7 +1596,7 @@ hat       = '^' -
 semicolon = ';' - 
 dot       = '.' -
 
-comment   = '\"' <(!'\"' .)*> '\"'                                                   {$$ = mk_string(yytext);}
+comment   = '\"' (!'\"' .)* '\"'
 
 -         = ([ \t\n\r] | comment)*
 
@@ -1582,6 +1635,8 @@ validate_value(value a)
   }
 }
 
+int code_binary = 1;
+
 void
 print_value(value a)
 {
@@ -1602,15 +1657,234 @@ print_value(value a)
   } else if (a->type == SASSOC) {
     fprintf(output, "#%s->%s", a->body.string, a->body.string);
   } else if (a->type == SCODE) {
-    fprintf(output, "[");
-    for (i = 0; i < a->size; i++) {
-      fprintf(output, "16r%X", a->body.string[i]);
-      if (i < a->size - 1) fprintf(output, ", ");
+    if (code_binary) {
+      fwrite(code_of(a), 1, a->size, output);
+    } else {
+      int i;
+      fprintf(output, "[");
+      for (i = 0; i < a->size - 1; i++) {
+        fprintf(output, "16r%X", a->body.string[i]);
+        fprintf(output, ", ");
+      }
+      fprintf(output, "16r%X]", a->body.string[a->size-1]);
     }
-    fprintf(output, "]");
   }
 }
 
+int
+round_up_to(int i)
+{
+  return i + (4 - (i % 4)) % 4;
+}
+
+#define INIT 248
+#define DOIT 250
+#define METHODDEF 252
+#define CLASSDEF 254
+
+uchar collection[10240];
+static int max_pos;
+static int current_pos;
+
+void
+int32(int i)
+{
+  collection[current_pos++] = ((i >> 24) & 0xFF);
+  collection[current_pos++] = ((i >> 16) & 0xFF);
+  collection[current_pos++] = ((i >>  8) & 0xFF);
+  collection[current_pos++] = ((i >>  0) & 0xFF);
+}
+
+void
+generate_string(uchar *v, int size)
+{
+  int32(size);
+  memcpy(collection+current_pos, v, size);
+  current_pos = current_pos + size;
+  while (current_pos % 4) {
+    collection[current_pos++] = 0;
+  }
+}
+
+void
+generate_string_value(value vv)
+{
+  if (vv->type == SCODE) {
+    generate_string(code_of(vv), vv->size);
+  } else {
+    generate_string(string_of(vv), strlen(string_of(vv)));
+  }
+}
+
+int
+generate_literal(value lit)
+{
+  int pos;
+  if (lit->type == SEXPRESSION) {
+     int i;
+     int *new_array;
+     pos = current_pos;
+     new_array = malloc(lit->size * 4);
+     current_pos = current_pos + (lit->size + 1) * 4;
+     max_pos = current_pos;
+     for (i = 0; i < lit->size; i++) {
+       current_pos = max_pos;
+       new_array[i] = generate_literal(expression_at(lit, i));
+     }
+     current_pos = pos;
+     int32(lit->size);
+     for (i = 0; i < lit->size; i++) {
+       int32(new_array[i]);
+     }
+     max_pos = max_pos > current_pos ? max_pos : current_pos;
+     free(new_array);
+     return ((pos & 0xFFFFFF) << 8) + 6;
+  } else if (lit->type == SINTEGER) {
+     return (lit->body.integer << 1) + 1;
+  } else if (lit->type == SASSOC) {
+     pos = current_pos;
+     generate_string_value(lit);
+     max_pos = max_pos > current_pos ? max_pos : current_pos;
+     return (pos << 8) + 0;
+  } else if (lit->type == SSTRING) {
+     pos = current_pos;
+     generate_string_value(lit);
+     max_pos = max_pos > current_pos ? max_pos : current_pos;
+     return (pos << 8) + 2;
+  } else if (lit->type == SSYMBOL) {
+     pos = current_pos;
+     generate_string_value(lit);
+     max_pos = max_pos > current_pos ? max_pos : current_pos;
+     return (pos << 8) + 4;
+  } else if (lit->type == SCHAR) {
+     return (lit->body.integer << 8) + 14;
+  }
+  return -1;
+}
+
+value
+generate_class_def(value c, value p, value iCol, value cCol)
+{
+  value cn;
+  value pn;
+  value code;
+  uchar iv[512];
+  uchar cv[512];
+  int i;
+  int size;
+  int pos;
+  if (strncmp(string_of(c), class_name_prefix, strlen(class_name_prefix)) == 0) {
+    cn = mk_string(string_of(c) + strlen(class_name_prefix));
+  } else {
+    cn = c;
+  }
+
+  if (strncmp(string_of(p), class_name_prefix, strlen(class_name_prefix)) == 0) {
+    pn = mk_string(string_of(p) + strlen(class_name_prefix));
+  } else {
+    pn = p;
+  }
+
+  pos = 0;
+  iv[0] = 0;
+  for (i = 0; i < iCol->size; i++) {
+    pos = next_put_all(iv, pos, expression_at(iCol, i));
+    pos = next_put(iv, pos, ' ');
+  }
+  if (iCol->size > 0) {iv[pos-1] = 0;}
+
+  pos = 0;
+  cv[0] = 0;
+  for (i = 0; i < cCol->size; i++) {
+    pos = next_put_all(cv, pos, expression_at(cCol, i));
+    pos = next_put(cv, pos, ' ');
+  }
+  if (cCol->size > 0) {cv[pos-1] = 0;}
+
+  size = 4 +
+         4 + round_up_to(strlen(string_of(pn))) + 
+	 4 + round_up_to(strlen(string_of(cn))) +
+ 	 4 + round_up_to(strlen(iv)) +
+	 4 + round_up_to(strlen(cv));
+
+//  collection = malloc(size*2);
+  current_pos = max_pos = 0;
+  int32((size << 8) + 254);
+  generate_string_value(pn);
+  generate_string_value(cn);
+  generate_string(iv, strlen(iv));
+  generate_string(cv, strlen(cv));
+  code = mk_code(collection, size);
+//  free(collection);
+  return code;
+}
+
+value
+generate_doit(value str)
+{
+  int size = 4 + 4 + round_up_to(strlen(string_of(str)));
+  value code;
+
+//  collection = malloc(size);
+  current_pos = max_pos = 0;
+  int32((size << 8) + 250);
+  generate_string(string_of(str), strlen(string_of(str)));
+  code = mk_code(collection, size);
+//  free(collection);
+  return code;
+}
+
+value
+generate_init(value str)
+{
+  int size = 4 + 4 + round_up_to(strlen(string_of(str)));
+  value code;
+
+//  collection = malloc(size);
+  current_pos = max_pos = 0;
+  int32((size << 8) + 248);
+  generate_string(string_of(str), strlen(string_of(str)));
+  code = mk_code(collection, size);
+//  free(collection);
+  return code;
+}
+
+value
+generate_method(value bytes)
+{
+  int size;
+  value literal_bytes;
+  value code;
+  int header;
+//  collection = malloc(4096);
+  max_pos = current_pos = 0;
+  generate_literal(literals);
+  literal_bytes = mk_code(collection, max_pos);
+  size = 4 + 4 +
+         4 + round_up_to(strlen(class_name)) +
+         4 + round_up_to(strlen(string_of(message))) +
+         4 + round_up_to(bytes->size) +
+         4 + round_up_to(literal_bytes->size);
+
+//  free(collection);
+//  collection = malloc(size);
+  max_pos = current_pos = 0;
+  header = (arguments->size << 24) + 
+           (maxTemporaries << 18) +
+           (1 << 17) +
+           (literals->size << 9) +
+           0;
+  
+  int32((size << 8) + 252);
+  int32(header);
+  generate_string(class_name, strlen(class_name));
+  generate_string_value(message);
+  generate_string_value(bytes);
+  generate_string_value(literal_bytes);
+  code = mk_code(collection, size);
+//  free(collection);
+  return code;
+}
 
 #ifndef TEST
 int main(int argc, char **argv)
@@ -1623,7 +1897,7 @@ int main(int argc, char **argv)
   memset(&g, 0, sizeof(GREG));
 
   if (argc == 3) {
-    if (!(output= fopen(argv[2], "w"))) {
+    if (!(output= fopen(argv[2], "wb"))) {
        perror(*argv);
        exit(1);
     }
@@ -1632,12 +1906,15 @@ int main(int argc, char **argv)
     if (strcmp(argv[1], "-") == 0) {
       ;
     } else {
-      if (!(input= fopen(argv[1], "r"))) {
+      if (!(input= fopen(argv[1], "rb"))) {
         perror(*argv);
 	exit(1);
       }
     }
   }
+
+  class_name_prefix[0] = 'M';
+  class_name_prefix[1] = 0;
 
 #define E(v) mk_string(#v)
   special_variables = mk_expression(E(self), E(thisContext), E(super), E(nil), E(false), E(true), NULL);
