@@ -1,15 +1,20 @@
-CFLAGS = -g -Wall -O3
+# The commands that are not standard.  You also need gzip, rm and cat.
 CC = gcc
+SQUEAK = C:/squeak/Squeak
+GREG = ../greg/greg
 
+CFLAGS = -Wall -O3
+
+# The repository does not have msqueak-orig.image.
+# Download http://tinlizzie.org/~ohshima/SqueakBootstrapper.zip and evaluate:
+# "MicroSqueakImageBuilder new buildImageNamed: 'msqueak-orig.image'"
 ORIGIMAGE = msqueak-orig.image
 NEWIMAGE = msqueak.image
-
-SQUEAK = C:/squeak/Squeak
 
 all : test
 
 sq : sq.greg
-	../greg -o sqgreg.c sq.greg
+	$(GREG) -o sqgreg.c sq.greg
 	$(CC) $(CFLAGS) -o sq sqgreg.c 
 
 test: compiler.sto $(NEWIMAGE)
@@ -17,9 +22,8 @@ test: compiler.sto $(NEWIMAGE)
 	$(SQUEAK) $(NEWIMAGE) AllMCompilerMethods.st true
 	$(SQUEAK) $(NEWIMAGE) AllMCompilerMethods.st true
 
-image: image.c
-
-image.c: mkimage $(ORIGIMAGE).gz
+# It actually depends on mkimage $(ORIGIMAGE).gz
+image.c: 
 	./mkimage $(ORIGIMAGE).gz $@
 
 $(ORIGIMAGE).gz: $(ORIGIMAGE)
@@ -37,6 +41,5 @@ compiler.sto: sq AllMCompilerClasses.st AllMCompilerMethods.st MCompilerInitiali
 	./sq test.st compiler.sto
 	rm -f test.st
 
-clean : .FORCE
-	rm -f *~ *.o sqgreg.c image.c *.image *.image.gz sq mkimage image
-
+clean : 
+	rm -f *~ *.o *.exe sqgreg.c *.image *.image.gz sq mkimage image *.sto log.txt
